@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+
+# Local data / databases
+data/
+*.db
+
+# Environment
+.env
+
+# macOS
+.DS_Store
