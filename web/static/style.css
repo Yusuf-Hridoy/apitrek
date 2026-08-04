@@ -250,7 +250,7 @@ textarea {
     align-items: center;
     gap: 0.375rem;
     padding: 0.5rem 0.875rem;
-    background: #fff;
+    background: var(--bg-secondary);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -261,7 +261,7 @@ textarea {
 }
 
 .btn-secondary:hover {
-    background: var(--bg);
+    background: var(--bg-inset);
 }
 
 /* Spinner */
@@ -286,7 +286,7 @@ textarea {
     gap: 0.75rem;
     background: var(--error-bg);
     color: var(--error-text);
-    border: 1px solid #fecaca;
+    border: 1px solid var(--border-color);
     border-radius: var(--radius);
     padding: 1rem 1.25rem;
     margin-bottom: 1.5rem;
@@ -732,7 +732,7 @@ textarea {
 }
 
 .security-mode-active {
-    background: #eef2f6;
+    background: var(--bg);
 }
 
 .btn-danger {
@@ -771,6 +771,12 @@ textarea {
     margin-bottom: 1rem;
 }
 
+.dark .security-warning {
+    background: #451a03;
+    border-color: #f59e0b;
+    color: #fde68a;
+}
+
 .warning-dismiss {
     margin-left: auto;
     background: none;
@@ -779,6 +785,10 @@ textarea {
     cursor: pointer;
     color: #92400e;
     line-height: 1;
+}
+
+.dark .warning-dismiss {
+    color: #fcd34d;
 }
 
 .owasp-categories {
