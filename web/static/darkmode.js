@@ -23,7 +23,7 @@
         document.documentElement.classList.toggle('dark', theme === 'dark');
         const btn = document.getElementById('darkModeToggle');
         if (btn) {
-            btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+            btn.textContent = theme === 'dark' ? 'Light mode' : 'Dark mode';
             btn.setAttribute('aria-label',
                 theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
         }
@@ -34,7 +34,7 @@
             const saved = localStorage.getItem(STORAGE_KEY);
             if (saved === 'dark' || saved === 'light') return saved;
         } catch (e) { /* ignore */ }
-        return checkSystemPreference();
+        return 'dark'; // dark is the default theme
     }
 
     function toggleDarkMode() {

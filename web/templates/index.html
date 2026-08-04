@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="API Sentinel — AI-powered API test generation, live execution, OWASP security scanning, and OpenAPI contract testing.">
-    <meta name="theme-color" content="#0f172a">
+    <meta name="theme-color" content="#0a0f1e">
     <meta property="og:title" content="API Sentinel — Smart API Testing Assistant">
     <meta property="og:description" content="Generate, execute, and secure API tests with AI. OWASP Top 10 scanning and OpenAPI contract validation built in.">
     <meta property="og:type" content="website">
@@ -14,295 +14,374 @@
 </head>
 <body>
     <div class="toast-container" id="toastContainer"></div>
-    <button type="button" id="menuToggle" class="menu-toggle" aria-label="Toggle history sidebar">☰</button>
+    <button type="button" id="menuToggle" class="menu-toggle" aria-label="Toggle navigation">☰</button>
     <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
-    <div class="container page-content">
-        <header class="header">
-            <div class="header-top">
-                <h1>API Sentinel</h1>
-                <button type="button" id="darkModeToggle" class="dark-mode-toggle" aria-label="Toggle dark mode">🌙</button>
-            </div>
-            <p class="subtitle">AI-powered API test case generator, executor &amp; security scanner</p>
-        </header>
 
-        <div class="layout">
-            <aside id="historySidebar" class="history-sidebar">
-                <h3>History</h3>
-                <div id="historyList">
-                    <div class="skeleton skeleton-card"></div>
-                    <div class="skeleton skeleton-card"></div>
-                    <div class="skeleton skeleton-card"></div>
+    <div class="app-shell">
+        <!-- Sidebar -->
+        <aside id="appSidebar" class="sidebar">
+            <div class="brand">
+                <div class="brand-logo">S</div>
+                <div class="brand-text">
+                    <strong>API Sentinel</strong>
+                    <span>Test &amp; security suite</span>
                 </div>
-            </aside>
-
-            <main class="main">
-            <div class="mode-toggle" id="modeToggle">
-                <button type="button" id="modeFunctional" class="mode-btn active">Functional Testing</button>
-                <button type="button" id="modeSecurity" class="mode-btn" data-tooltip="Scans for OWASP API Top 10 vulnerabilities">Security Scanning</button>
             </div>
-            <p id="modeSubtitle" class="mode-subtitle">Generate and execute API test cases</p>
 
-            <section class="card input-card">
-                <div class="card-header-row">
-                    <h2>API Details</h2>
+            <nav class="nav">
+                <div class="nav-section">
+                    <div class="nav-label">Modes</div>
+                    <button type="button" id="modeFunctional" class="nav-item active">Functional Testing</button>
+                    <button type="button" id="modeSecurity" class="nav-item" data-tooltip="Scans for OWASP API Top 10 vulnerabilities">Security Scanning</button>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-label">Workspace</div>
+                    <button type="button" id="navHistory" class="nav-item">History</button>
+                    <button type="button" id="navCollections" class="nav-item">Collections</button>
+                    <button type="button" id="navDocs" class="nav-item">Documentation</button>
+                </div>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button type="button" id="darkModeToggle" class="theme-toggle" aria-label="Toggle dark mode">Light mode</button>
+            </div>
+        </aside>
+
+        <!-- Main -->
+        <main class="main">
+            <header class="main-header">
+                <div class="main-header-text">
+                    <h1 id="viewTitle">Functional Testing</h1>
+                    <p id="modeSubtitle" class="subtitle">Generate and execute API test cases</p>
+                </div>
+                <div class="main-header-actions">
                     <button type="button" id="importOpenapiBtn" class="btn-secondary">Import from OpenAPI</button>
                 </div>
-                <form id="testForm" class="form">
-                    <div class="form-group">
-                        <label for="endpoint">API Endpoint <span class="required">*</span></label>
-                        <input 
-                            type="url" 
-                            id="endpoint" 
-                            name="endpoint" 
-                            placeholder="https://api.example.com/items/1"
-                            required
-                        >
-                        <span class="field-error hidden" id="endpointError"></span>
-                    </div>
+            </header>
 
-                    <div class="form-group">
-                        <label for="method">HTTP Method</label>
-                        <select id="method" name="method">
-                            <option value="GET" selected>GET</option>
-                            <option value="POST">POST</option>
-                            <option value="PUT">PUT</option>
-                            <option value="DELETE">DELETE</option>
-                            <option value="PATCH">PATCH</option>
-                        </select>
-                    </div>
+            <!-- Testing view (Functional + Security) -->
+            <div id="view-testing" class="view">
+                <section id="errorSection" class="error-banner hidden">
+                    <span class="error-icon">&#9888;</span>
+                    <span id="errorMessage"></span>
+                    <button type="button" id="errorDismiss" class="error-dismiss" aria-label="Dismiss">&times;</button>
+                </section>
 
-                    <div class="form-group checkbox-group">
-                        <label class="checkbox-label" data-tooltip="Calls the API first to get real data">
-                            <input type="checkbox" id="autoFetch" name="autoFetch">
-                            <span>Auto-fetch sample response</span>
-                        </label>
-                        <span class="hint-text">Automatically call the API and use the real response for test generation.</span>
-                    </div>
+                <div class="workspace-grid">
+                    <!-- Left column: input + security controls -->
+                    <div class="col-left">
+                        <section class="card input-card">
+                            <form id="testForm" class="form">
+                                <div class="form-group">
+                                    <label for="endpoint">API Endpoint <span class="required">*</span></label>
+                                    <input
+                                        type="url"
+                                        id="endpoint"
+                                        name="endpoint"
+                                        placeholder="https://api.example.com/items/1"
+                                        required
+                                    >
+                                    <span class="field-error hidden" id="endpointError"></span>
+                                </div>
 
-                    <div class="form-group">
-                        <label for="headers">Request Headers <span class="hint">(optional)</span></label>
-                        <textarea 
-                            id="headers" 
-                            name="headers" 
-                            rows="3"
-                            placeholder='{"Authorization": "Bearer token", "Accept": "application/json"}'
-                        ></textarea>
-                        <span class="field-error hidden" id="headersError"></span>
-                    </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="method">HTTP Method</label>
+                                        <select id="method" name="method">
+                                            <option value="GET" selected>GET</option>
+                                            <option value="POST">POST</option>
+                                            <option value="PUT">PUT</option>
+                                            <option value="DELETE">DELETE</option>
+                                            <option value="PATCH">PATCH</option>
+                                        </select>
+                                    </div>
+                                    <label class="checkbox-label autofetch" data-tooltip="Calls the API first to get real data">
+                                        <input type="checkbox" id="autoFetch" name="autoFetch">
+                                        <span>Auto-fetch sample response</span>
+                                    </label>
+                                </div>
 
-                    <div class="form-group">
-                        <label for="requestBody">Request Body <span class="hint">(optional, for POST/PUT/PATCH)</span></label>
-                        <textarea 
-                            id="requestBody" 
-                            name="requestBody" 
-                            rows="4"
-                            placeholder='{"key": "value"}'
-                        ></textarea>
-                        <span class="field-error hidden" id="requestBodyError"></span>
-                    </div>
+                                <details class="advanced" id="advancedFields">
+                                    <summary>Add headers, body &amp; sample response <span class="plus">+</span></summary>
+                                    <div class="advanced-body">
+                                        <div class="form-group">
+                                            <label for="headers">Request Headers <span class="hint">(optional)</span></label>
+                                            <textarea
+                                                id="headers"
+                                                name="headers"
+                                                rows="3"
+                                                placeholder='{"Authorization": "Bearer token", "Accept": "application/json"}'
+                                            ></textarea>
+                                            <span class="field-error hidden" id="headersError"></span>
+                                        </div>
 
-                    <div class="form-group" id="sampleResponseGroup">
-                        <label for="sampleResponse">Sample Response JSON <span class="hint">(optional)</span></label>
-                        <textarea 
-                            id="sampleResponse" 
-                            name="sampleResponse" 
-                            rows="8"
-                            placeholder='{"id": 1, "title": "Example", "price": 99.99}'
-                        ></textarea>
-                        <span class="hint-text">Paste a sample JSON response to improve test case quality.</span>
-                    </div>
+                                        <div class="form-group">
+                                            <label for="requestBody">Request Body <span class="hint">(optional, for POST/PUT/PATCH)</span></label>
+                                            <textarea
+                                                id="requestBody"
+                                                name="requestBody"
+                                                rows="4"
+                                                placeholder='{"key": "value"}'
+                                            ></textarea>
+                                            <span class="field-error hidden" id="requestBodyError"></span>
+                                        </div>
 
-                    <button type="submit" class="btn-primary" id="submitBtn">
-                        <span class="btn-text">Generate Test Cases</span>
-                        <span class="spinner hidden"></span>
-                    </button>
-                </form>
-            </section>
+                                        <div class="form-group" id="sampleResponseGroup">
+                                            <label for="sampleResponse">Sample Response JSON <span class="hint">(optional)</span></label>
+                                            <textarea
+                                                id="sampleResponse"
+                                                name="sampleResponse"
+                                                rows="8"
+                                                placeholder='{"id": 1, "title": "Example", "price": 99.99}'
+                                            ></textarea>
+                                            <span class="hint-text">Paste a sample JSON response to improve test case quality.</span>
+                                        </div>
+                                    </div>
+                                </details>
 
-            <section id="errorSection" class="error-banner hidden">
-                <span class="error-icon">&#9888;</span>
-                <span id="errorMessage"></span>
-                <button type="button" id="errorDismiss" class="error-dismiss" aria-label="Dismiss">&times;</button>
-            </section>
+                                <button type="submit" class="btn-primary" id="submitBtn">
+                                    <span class="btn-text">Generate Test Cases</span>
+                                    <span class="spinner hidden"></span>
+                                </button>
+                            </form>
+                        </section>
 
-            <div id="emptyState" class="empty-state">
-                <div class="empty-icon">🔍</div>
-                <h2>Start by entering an API endpoint</h2>
-                <p>Paste an API URL, choose the HTTP method, and click "Generate Test Cases" to get AI-powered tests.</p>
-                <div class="empty-tips">
-                    <span>💡 Tip: Check "Auto-fetch" to pull a real response</span>
-                    <span>🛡️ Try "Security Scanning" mode to find vulnerabilities</span>
-                </div>
-            </div>
-
-            <section id="securitySection" class="card hidden">
-                <h2>OWASP API Security Scan</h2>
-                <div id="securityWarning" class="security-warning">
-                    <span>&#9888;&#65039;</span>
-                    <span><strong>Authorized testing only.</strong> Only scan APIs you own or have explicit written permission to test.</span>
-                    <button type="button" id="dismissWarningBtn" class="warning-dismiss" aria-label="Dismiss">&times;</button>
-                </div>
-                <div class="form-group">
-                    <label>OWASP Categories</label>
-                    <div id="owaspCategories" class="owasp-categories"></div>
-                </div>
-                <div class="form-group">
-                    <label for="severityFilter">Severity filter</label>
-                    <select id="severityFilter">
-                        <option value="all" selected>All severities</option>
-                        <option value="Critical">Critical</option>
-                        <option value="High">High</option>
-                        <option value="Medium">Medium</option>
-                        <option value="Low">Low</option>
-                    </select>
-                </div>
-                <button type="button" id="runScanBtn" class="btn-danger">
-                    <span class="btn-text">Run Security Scan</span>
-                    <span class="spinner hidden"></span>
-                </button>
-            </section>
-
-            <section id="securityResults" class="card hidden">
-                <h2>Scan Results</h2>
-                <div class="risk-score-gauge">
-                    <div class="risk-score-bar">
-                        <div id="riskScoreFill" class="risk-score-fill"></div>
-                    </div>
-                    <div id="riskScoreLabel" class="risk-score-label"></div>
-                </div>
-                <div id="scanSummary" class="scan-summary"></div>
-                <div class="results-actions sec-export-actions">
-                    <button id="exportSecMdBtn" class="btn-secondary">Export Markdown Report</button>
-                    <button id="exportSecHtmlBtn" class="btn-secondary">Export HTML Report</button>
-                </div>
-                <table class="findings-table">
-                    <thead>
-                        <tr>
-                            <th>Severity</th>
-                            <th>OWASP</th>
-                            <th>Title</th>
-                            <th>Status</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody id="findingsBody"></tbody>
-                </table>
-            </section>
-
-            <div id="resultsSkeleton" class="hidden">
-                <div class="skeleton skeleton-card"></div>
-                <div class="skeleton skeleton-card"></div>
-                <div class="skeleton skeleton-card"></div>
-            </div>
-
-            <section id="resultsSection" class="results hidden">
-                <div id="executionSummary" class="execution-summary hidden"></div>
-
-                <div class="results-header">
-                    <h2>Generated Test Cases <span id="providerBadge" class="provider-badge hidden"></span></h2>
-                    <div class="results-actions">
-                        <button id="runAllBtn" class="btn-secondary" data-tooltip="Executes all generated tests against the live API">Run All Tests</button>
-                        <button id="exportBtn" class="btn-secondary" data-tooltip="Exports a runnable Python test file">Download Pytest Script</button>
-                        <button id="exportPostmanBtn" class="btn-secondary">Download Postman Collection</button>
-                        <button id="copyBtn" class="btn-secondary">Copy JSON</button>
-                    </div>
-                </div>
-
-                <div id="executionProgress" class="execution-progress hidden">
-                    <div class="execution-progress-bar">
-                        <div id="executionProgressFill" class="execution-progress-bar-fill"></div>
-                    </div>
-                    <span id="executionProgressText" class="execution-progress-text"></span>
-                </div>
-
-                <div id="contractPanel" class="contract-panel hidden">
-                    <h3>Contract Validation</h3>
-                    <div id="contractResults"></div>
-                </div>
-
-                <div class="cicd-export">
-                    <h3>Export CI/CD Pipeline</h3>
-                    <div class="export-format-cards" id="cicdFormatCards">
-                        <div class="export-format-card" data-format="github">
-                            <strong>GitHub Actions Workflow</strong>
-                            <p>Run API tests on every push and pull request.</p>
-                        </div>
-                        <div class="export-format-card" data-format="gitlab">
-                            <strong>GitLab CI Pipeline</strong>
-                            <p>Test and report stages with JUnit artifacts and coverage.</p>
-                        </div>
-                        <div class="export-format-card" data-format="azure">
-                            <strong>Azure Pipelines</strong>
-                            <p>Run tests, publish results and artifacts.</p>
-                        </div>
-                    </div>
-                    <div id="cicdPreview" class="hidden">
-                        <div class="cicd-preview-header">
-                            <span id="cicdFilename" class="cicd-filename"></span>
-                            <div class="cicd-preview-actions">
-                                <button id="cicdCopyBtn" class="btn-secondary">Copy to Clipboard</button>
-                                <button id="cicdDownloadBtn" class="btn-secondary">Download .yml</button>
+                        <section id="securitySection" class="card hidden">
+                            <h2>OWASP API Security Scan</h2>
+                            <div id="securityWarning" class="security-warning">
+                                <span>&#9888;&#65039;</span>
+                                <span><strong>Authorized testing only.</strong> Only scan APIs you own or have explicit written permission to test.</span>
+                                <button type="button" id="dismissWarningBtn" class="warning-dismiss" aria-label="Dismiss">&times;</button>
                             </div>
-                        </div>
-                        <pre class="code-preview"><code id="cicdYaml"></code></pre>
+                            <div class="form-group">
+                                <label>OWASP Categories</label>
+                                <div id="owaspCategories" class="owasp-categories"></div>
+                            </div>
+                            <div class="form-group">
+                                <label for="severityFilter">Severity filter</label>
+                                <select id="severityFilter">
+                                    <option value="all" selected>All severities</option>
+                                    <option value="Critical">Critical</option>
+                                    <option value="High">High</option>
+                                    <option value="Medium">Medium</option>
+                                    <option value="Low">Low</option>
+                                </select>
+                            </div>
+                            <button type="button" id="runScanBtn" class="btn-danger">
+                                <span class="btn-text">Run Security Scan</span>
+                                <span class="spinner hidden"></span>
+                            </button>
+                        </section>
+                    </div>
+
+                    <!-- Right column: results -->
+                    <div class="col-right">
+                        <section class="card results-panel">
+                            <h2 class="panel-title">Results</h2>
+
+                            <div id="emptyState" class="empty-state">
+                                <div class="empty-icon-circle"></div>
+                                <h3>No results yet</h3>
+                                <p>Enter an endpoint and run to generate executable test cases here.</p>
+                            </div>
+
+                            <div id="resultsSkeleton" class="hidden">
+                                <div class="skeleton skeleton-card"></div>
+                                <div class="skeleton skeleton-card"></div>
+                                <div class="skeleton skeleton-card"></div>
+                            </div>
+
+                            <section id="resultsSection" class="results hidden">
+                                <div id="executionSummary" class="execution-summary hidden"></div>
+
+                                <div class="results-header">
+                                    <h2>Generated Test Cases <span id="providerBadge" class="provider-badge hidden"></span></h2>
+                                    <div class="results-actions">
+                                        <button id="runAllBtn" class="btn-secondary" data-tooltip="Executes all generated tests against the live API">Run All Tests</button>
+                                        <button id="exportBtn" class="btn-secondary" data-tooltip="Exports a runnable Python test file">Download Pytest Script</button>
+                                        <button id="exportPostmanBtn" class="btn-secondary">Download Postman Collection</button>
+                                        <button id="copyBtn" class="btn-secondary">Copy JSON</button>
+                                    </div>
+                                </div>
+
+                                <div id="executionProgress" class="execution-progress hidden">
+                                    <div class="execution-progress-bar">
+                                        <div id="executionProgressFill" class="execution-progress-bar-fill"></div>
+                                    </div>
+                                    <span id="executionProgressText" class="execution-progress-text"></span>
+                                </div>
+
+                                <div id="contractPanel" class="contract-panel hidden">
+                                    <h3>Contract Validation</h3>
+                                    <div id="contractResults"></div>
+                                </div>
+
+                                <div class="cicd-export">
+                                    <h3>Export CI/CD Pipeline</h3>
+                                    <div class="export-format-cards" id="cicdFormatCards">
+                                        <div class="export-format-card" data-format="github">
+                                            <strong>GitHub Actions Workflow</strong>
+                                            <p>Run API tests on every push and pull request.</p>
+                                        </div>
+                                        <div class="export-format-card" data-format="gitlab">
+                                            <strong>GitLab CI Pipeline</strong>
+                                            <p>Test and report stages with JUnit artifacts and coverage.</p>
+                                        </div>
+                                        <div class="export-format-card" data-format="azure">
+                                            <strong>Azure Pipelines</strong>
+                                            <p>Run tests, publish results and artifacts.</p>
+                                        </div>
+                                    </div>
+                                    <div id="cicdPreview" class="hidden">
+                                        <div class="cicd-preview-header">
+                                            <span id="cicdFilename" class="cicd-filename"></span>
+                                            <div class="cicd-preview-actions">
+                                                <button id="cicdCopyBtn" class="btn-secondary">Copy to Clipboard</button>
+                                                <button id="cicdDownloadBtn" class="btn-secondary">Download .yml</button>
+                                            </div>
+                                        </div>
+                                        <pre class="code-preview"><code id="cicdYaml"></code></pre>
+                                    </div>
+                                </div>
+
+                                <div class="results-grid">
+                                    <div class="result-group">
+                                        <h3 class="group-title positive">
+                                            <span class="badge">&#10003;</span> Positive Test Cases
+                                        </h3>
+                                        <div id="positiveList" class="case-list"></div>
+                                    </div>
+
+                                    <div class="result-group">
+                                        <h3 class="group-title negative">
+                                            <span class="badge">&#10007;</span> Negative Test Cases
+                                        </h3>
+                                        <div id="negativeList" class="case-list"></div>
+                                    </div>
+
+                                    <div class="result-group">
+                                        <h3 class="group-title edge">
+                                            <span class="badge">&#9889;</span> Edge Cases
+                                        </h3>
+                                        <div id="edgeList" class="case-list"></div>
+                                    </div>
+
+                                    <div class="result-group">
+                                        <h3 class="group-title assertions">
+                                            <span class="badge">&#128170;</span> Assertions
+                                        </h3>
+                                        <div id="assertionsList" class="case-list"></div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section id="securityResults" class="hidden">
+                                <h2>Scan Results</h2>
+                                <div class="risk-score-gauge">
+                                    <div class="risk-score-bar">
+                                        <div id="riskScoreFill" class="risk-score-fill"></div>
+                                    </div>
+                                    <div id="riskScoreLabel" class="risk-score-label"></div>
+                                </div>
+                                <div id="scanSummary" class="scan-summary"></div>
+                                <div class="results-actions sec-export-actions">
+                                    <button id="exportSecMdBtn" class="btn-secondary">Export Markdown Report</button>
+                                    <button id="exportSecHtmlBtn" class="btn-secondary">Export HTML Report</button>
+                                </div>
+                                <table class="findings-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Severity</th>
+                                            <th>OWASP</th>
+                                            <th>Title</th>
+                                            <th>Status</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="findingsBody"></tbody>
+                                </table>
+                            </section>
+                        </section>
                     </div>
                 </div>
-
-                <div class="results-grid">
-                    <div class="result-group">
-                        <h3 class="group-title positive">
-                            <span class="badge">&#10003;</span> Positive Test Cases
-                        </h3>
-                        <div id="positiveList" class="case-list"></div>
-                    </div>
-
-                    <div class="result-group">
-                        <h3 class="group-title negative">
-                            <span class="badge">&#10007;</span> Negative Test Cases
-                        </h3>
-                        <div id="negativeList" class="case-list"></div>
-                    </div>
-
-                    <div class="result-group">
-                        <h3 class="group-title edge">
-                            <span class="badge">&#9889;</span> Edge Cases
-                        </h3>
-                        <div id="edgeList" class="case-list"></div>
-                    </div>
-
-                    <div class="result-group">
-                        <h3 class="group-title assertions">
-                            <span class="badge">&#128170;</span> Assertions
-                        </h3>
-                        <div id="assertionsList" class="case-list"></div>
-                    </div>
-                </div>
-            </section>
-        </main>
-        </div>
-
-        <div id="openapiModal" class="modal-overlay hidden">
-            <div class="openapi-modal">
-                <div class="modal-header">
-                    <h2>Import OpenAPI Spec</h2>
-                    <button type="button" id="closeOpenapiModal" class="modal-close" aria-label="Close">&times;</button>
-                </div>
-                <div class="form-group">
-                    <label for="openapiSpecText">Paste your OpenAPI 3.0/3.1 spec (JSON or YAML)</label>
-                    <textarea id="openapiSpecText" rows="12" placeholder='{"openapi": "3.0.0", "info": {...}, "paths": {...}}'></textarea>
-                </div>
-                <button type="button" id="parseSpecBtn" class="btn-primary">Parse Spec</button>
-                <div id="openapiError" class="openapi-error hidden"></div>
-                <div id="openapiInfo" class="openapi-info hidden"></div>
-                <div id="endpointExplorer" class="endpoint-list hidden"></div>
             </div>
-        </div>
 
-        <footer class="footer">
-            <p>Powered by API Sentinel &middot; AI test generation, OWASP scanning &amp; contract testing &middot;
-                <a href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a>
-            </p>
-        </footer>
+            <!-- History view -->
+            <div id="view-history" class="view hidden">
+                <section class="card">
+                    <div class="history-tabs" id="historyTabs">
+                        <button type="button" class="history-tab active" data-mode="functional">
+                            Functional <span class="history-tab-count" id="histCountFunctional">0</span>
+                        </button>
+                        <button type="button" class="history-tab" data-mode="security">
+                            Security <span class="history-tab-count" id="histCountSecurity">0</span>
+                        </button>
+                    </div>
+                    <div id="historyList">
+                        <div class="skeleton skeleton-card"></div>
+                        <div class="skeleton skeleton-card"></div>
+                        <div class="skeleton skeleton-card"></div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Collections view (placeholder) -->
+            <div id="view-collections" class="view hidden">
+                <section class="card placeholder-panel">
+                    <div class="empty-icon-circle"></div>
+                    <h3>Collections — coming soon</h3>
+                    <p>Saved request collections will live here. For now, use History to reload past sessions or export a Postman collection from your results.</p>
+                </section>
+            </div>
+
+            <!-- Documentation view -->
+            <div id="view-documentation" class="view hidden">
+                <section class="card docs-panel">
+                    <h2>What is API Sentinel?</h2>
+                    <p>AI-powered API testing. Enter an endpoint and it generates positive, negative, and edge test cases plus assertions — which you can execute live, export, or scan for security issues.</p>
+
+                    <h2>Functional Testing</h2>
+                    <ul>
+                        <li>Enter an <strong>API Endpoint</strong> and pick an HTTP method.</li>
+                        <li>Tick <strong>Auto-fetch sample response</strong> to call the API and use its real response, or expand <code>Add headers, body &amp; sample response</code> to paste one.</li>
+                        <li>Click <strong>Generate Test Cases</strong>. Run tests individually or use <strong>Run All Tests</strong> against the live API.</li>
+                        <li>Export a <strong>Pytest</strong> script, a <strong>Postman</strong> collection, or a <strong>CI/CD</strong> pipeline (GitHub / GitLab / Azure).</li>
+                    </ul>
+
+                    <h2>Security Scanning</h2>
+                    <p>Switch to <strong>Security Scanning</strong> to probe the endpoint against the <strong>OWASP API Top 10</strong>. Only scan APIs you own or are authorized to test. Results include a risk score and an exportable Markdown/HTML report.</p>
+
+                    <h2>Import from OpenAPI</h2>
+                    <p>Click <strong>Import from OpenAPI</strong> to paste a 3.0/3.1 spec (JSON or YAML), pick an endpoint to load it into the form, and validate live responses against the documented schema (contract testing).</p>
+
+                    <h2>History</h2>
+                    <p>Every generation and run is saved. Open <strong>History</strong> to reload, rerun, or delete past sessions.</p>
+                </section>
+            </div>
+
+            <footer class="footer">
+                <p>Powered by API Sentinel &middot; AI test generation, OWASP scanning &amp; contract testing &middot;
+                    <a href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a>
+                </p>
+            </footer>
+        </main>
+    </div>
+
+    <div id="openapiModal" class="modal-overlay hidden">
+        <div class="openapi-modal">
+            <div class="modal-header">
+                <h2>Import OpenAPI Spec</h2>
+                <button type="button" id="closeOpenapiModal" class="modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="form-group">
+                <label for="openapiSpecText">Paste your OpenAPI 3.0/3.1 spec (JSON or YAML)</label>
+                <textarea id="openapiSpecText" rows="12" placeholder='{"openapi": "3.0.0", "info": {...}, "paths": {...}}'></textarea>
+            </div>
+            <button type="button" id="parseSpecBtn" class="btn-primary">Parse Spec</button>
+            <div id="openapiError" class="openapi-error hidden"></div>
+            <div id="openapiInfo" class="openapi-info hidden"></div>
+            <div id="endpointExplorer" class="endpoint-list hidden"></div>
+        </div>
     </div>
 
     <noscript>

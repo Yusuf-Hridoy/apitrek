@@ -549,15 +549,69 @@ document.addEventListener('DOMContentLoaded', () => {
         submitBtn.classList.toggle('hidden', isSecurity);
         hideError();
         hideResults();
-        if (!isSecurity) {
-            securityResults.classList.add('hidden');
-        } else if (!owaspLoaded) {
+        // Switching modes always resets the Results panel to its empty state.
+        securityResults.classList.add('hidden');
+        if (isSecurity && !owaspLoaded) {
             loadOwaspCategories();
         }
     }
 
-    modeFunctionalBtn.addEventListener('click', () => setMode('functional'));
-    modeSecurityBtn.addEventListener('click', () => setMode('security'));
+    // --- Sidebar view router (Modes + Workspace) ---
+    const viewTitle = document.getElementById('viewTitle');
+    const mainHeaderActions = document.querySelector('.main-header-actions');
+    const viewEls = {
+        testing: document.getElementById('view-testing'),
+        history: document.getElementById('view-history'),
+        collections: document.getElementById('view-collections'),
+        documentation: document.getElementById('view-documentation'),
+    };
+    const VIEW_META = {
+        history: { title: 'History', subtitle: 'Reload, rerun, or delete past sessions' },
+        collections: { title: 'Collections', subtitle: 'Saved request collections' },
+        documentation: { title: 'Documentation', subtitle: 'How to use API Sentinel' },
+    };
+
+    function setActiveNav(id) {
+        document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
+        const el = document.getElementById(id);
+        if (el) el.classList.add('active');
+    }
+
+    function showView(name) {
+        Object.entries(viewEls).forEach(([key, el]) => {
+            if (el) el.classList.toggle('hidden', key !== name);
+        });
+        if (mainHeaderActions) mainHeaderActions.classList.toggle('hidden', name !== 'testing');
+        const meta = VIEW_META[name];
+        if (meta) {
+            viewTitle.textContent = meta.title;
+            modeSubtitle.textContent = meta.subtitle;
+        }
+        if (name === 'history') loadHistory();
+        setSidebarOpen(false);
+    }
+
+    function goToTesting(mode) {
+        setMode(mode);
+        viewTitle.textContent = mode === 'security' ? 'Security Scanning' : 'Functional Testing';
+        setActiveNav(mode === 'security' ? 'modeSecurity' : 'modeFunctional');
+        showView('testing');
+    }
+
+    modeFunctionalBtn.addEventListener('click', () => goToTesting('functional'));
+    modeSecurityBtn.addEventListener('click', () => goToTesting('security'));
+    document.getElementById('navHistory').addEventListener('click', () => {
+        setActiveNav('navHistory');
+        showView('history');
+    });
+    document.getElementById('navCollections').addEventListener('click', () => {
+        setActiveNav('navCollections');
+        showView('collections');
+    });
+    document.getElementById('navDocs').addEventListener('click', () => {
+        setActiveNav('navDocs');
+        showView('documentation');
+    });
 
     dismissWarningBtn.addEventListener('click', () => securityWarning.classList.add('hidden'));
 
@@ -608,6 +662,10 @@ document.addEventListener('DOMContentLoaded', () => {
             `<span class="chip">${((data.scan_duration_ms || 0) / 1000).toFixed(1)}s</span>`;
 
         renderFindings();
+        // Take over the Results panel: hide the functional empty/skeleton/results.
+        emptyState.classList.add('hidden');
+        resultsSkeleton.classList.add('hidden');
+        resultsSection.classList.add('hidden');
         securityResults.classList.remove('hidden');
     }
 
@@ -957,72 +1015,111 @@ document.addEventListener('DOMContentLoaded', () => {
     const historyList = document.getElementById('historyList');
     const menuToggle = document.getElementById('menuToggle');
     const sidebarBackdrop = document.getElementById('sidebarBackdrop');
-    const historySidebar = document.getElementById('historySidebar');
+    const appSidebar = document.getElementById('appSidebar');
 
     function setSidebarOpen(open) {
-        if (!historySidebar || !sidebarBackdrop) return;
-        historySidebar.classList.toggle('open', open);
+        if (!appSidebar || !sidebarBackdrop) return;
+        appSidebar.classList.toggle('open', open);
         sidebarBackdrop.classList.toggle('open', open);
     }
     if (menuToggle) {
         menuToggle.addEventListener('click', () => {
-            setSidebarOpen(!(historySidebar && historySidebar.classList.contains('open')));
+            setSidebarOpen(!(appSidebar && appSidebar.classList.contains('open')));
         });
     }
     if (sidebarBackdrop) {
         sidebarBackdrop.addEventListener('click', () => setSidebarOpen(false));
     }
 
+    let allSessions = [];
+    let historyMode = 'functional';
+
     async function loadHistory() {
         try {
             const res = await fetch('/api/history/sessions');
             const data = await res.json();
-            renderHistory(data.sessions || []);
+            allSessions = data.sessions || [];
         } catch (err) {
+            allSessions = [];
             historyList.innerHTML = '<p class="case-desc">History unavailable.</p>';
+            return;
         }
+        renderHistory();
     }
 
-    function renderHistory(sessions) {
+    function isSecuritySession(s) {
+        return s.mode === 'security';
+    }
+
+    function renderHistory() {
+        const funcCount = allSessions.filter((s) => !isSecuritySession(s)).length;
+        const secCount = allSessions.filter(isSecuritySession).length;
+        const fc = document.getElementById('histCountFunctional');
+        const sc = document.getElementById('histCountSecurity');
+        if (fc) fc.textContent = funcCount;
+        if (sc) sc.textContent = secCount;
+
+        const sessions = allSessions.filter((s) =>
+            historyMode === 'security' ? isSecuritySession(s) : !isSecuritySession(s)
+        );
+
         if (!sessions.length) {
+            const hint = historyMode === 'security'
+                ? 'Run a security scan to see it here'
+                : 'Generate tests to see them here';
             historyList.innerHTML = `
                 <div class="history-empty">
-                    <p>No sessions yet</p>
-                    <p class="history-empty-hint">Generate tests to see them here</p>
+                    <p>No ${historyMode} sessions yet</p>
+                    <p class="history-empty-hint">${hint}</p>
                 </div>
             `;
             return;
         }
         historyList.innerHTML = '';
         sessions.forEach((s) => {
+            const security = isSecuritySession(s);
             const item = document.createElement('div');
             item.className = 'history-item';
             const date = (s.created_at || '').slice(0, 16).replace('T', ' ');
             const execInfo = s.executed_count ? ` · ${s.passed_count}/${s.executed_count} passed` : '';
+            // Rerun re-executes stored functional tests — not meaningful for scans.
+            const rerunBtn = security
+                ? ''
+                : '<button type="button" data-action="rerun" data-tooltip="Re-runs all tests from this session">Rerun</button>';
             item.innerHTML = `
                 <span class="history-endpoint">${escapeHtml(s.method)} ${escapeHtml(s.endpoint)}</span>
                 <div class="history-meta">
                     <span>${escapeHtml(date)}</span>
-                    <span>${s.test_count || 0} tests${execInfo}</span>
+                    <span>${s.test_count || 0} ${security ? 'checks' : 'tests'}${execInfo}</span>
                 </div>
                 <div class="history-actions">
                     <button type="button" data-action="load">Load</button>
-                    <button type="button" data-action="rerun" data-tooltip="Re-runs all tests from this session">Rerun</button>
+                    ${rerunBtn}
                     <button type="button" data-action="delete">Delete</button>
                 </div>
             `;
             item.querySelector('[data-action="load"]').addEventListener('click', () => {
                 historyList.querySelectorAll('.history-item.selected').forEach((el) => el.classList.remove('selected'));
                 item.classList.add('selected');
-                loadSession(s.id);
+                loadSession(s.id, s.mode);
             });
-            item.querySelector('[data-action="rerun"]').addEventListener('click', () => rerunSession(s.id));
+            const rerunEl = item.querySelector('[data-action="rerun"]');
+            if (rerunEl) rerunEl.addEventListener('click', () => rerunSession(s.id));
             item.querySelector('[data-action="delete"]').addEventListener('click', () => deleteSession(s.id));
             historyList.appendChild(item);
         });
     }
 
-    async function loadSession(id) {
+    document.querySelectorAll('#historyTabs .history-tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+            historyMode = tab.dataset.mode;
+            document.querySelectorAll('#historyTabs .history-tab').forEach((t) => t.classList.remove('active'));
+            tab.classList.add('active');
+            renderHistory();
+        });
+    });
+
+    async function loadSession(id, mode) {
         try {
             const res = await fetch(`/api/history/sessions/${id}`);
             const s = await res.json().catch(() => ({}));
@@ -1035,6 +1132,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('headers').value = s.headers ? JSON.stringify(s.headers, null, 2) : '';
             document.getElementById('requestBody').value = s.body ? JSON.stringify(s.body, null, 2) : '';
             document.getElementById('sampleResponse').value = s.sample_response ? JSON.stringify(s.sample_response, null, 2) : '';
+            goToTesting(mode === 'security' ? 'security' : 'functional');
             showToast('Session loaded into the form.', 'success');
         } catch (err) {
             showToast('Could not load session.', 'error');
@@ -1137,6 +1235,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function showResults() {
         resultsSection.classList.remove('hidden');
         emptyState.classList.add('hidden');
+        securityResults.classList.add('hidden');
     }
 
     function hideResults() {

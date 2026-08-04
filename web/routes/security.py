@@ -24,6 +24,7 @@ from exports.security_report_generator import (
     generate_html_report,
     generate_markdown_report,
 )
+from core.database import save_session, save_test_cases
 
 router = APIRouter(tags=["security"])
 
@@ -101,12 +102,39 @@ async def security_scan(payload: ScanRequest) -> Dict[str, Any]:
     ]
     scan_duration_ms = int((time.perf_counter() - start) * 1000)
 
-    return {
+    response: Dict[str, Any] = {
         "findings": findings,
         "risk_score": calculate_risk_score(findings),
         "summary": _build_summary(findings),
         "scan_duration_ms": scan_duration_ms,
     }
+
+    # Persist the scan for history (best-effort; never breaks the scan).
+    try:
+        session_id = save_session(
+            endpoint=endpoint,
+            method=method,
+            headers=payload.headers,
+            body=payload.body,
+            sample_response=payload.sample_response,
+            mode="security",
+        )
+        save_test_cases(session_id, [
+            {
+                "category": "security",
+                "title": f.get("title"),
+                "description": f.get("owasp_category"),
+                "payload": f.get("payload_used"),
+                "owasp_category": f.get("owasp_category"),
+                "severity": f.get("severity"),
+            }
+            for f in findings
+        ])
+        response["_session_id"] = session_id
+    except Exception as e:
+        print(f"[history] Failed to save security scan for {endpoint}: {e}")
+
+    return response
 
 
 @router.post("/security/report")
