@@ -157,16 +157,6 @@
                                 <label>OWASP Categories</label>
                                 <div id="owaspCategories" class="owasp-categories"></div>
                             </div>
-                            <div class="form-group">
-                                <label for="severityFilter">Severity filter</label>
-                                <select id="severityFilter">
-                                    <option value="all" selected>All severities</option>
-                                    <option value="Critical">Critical</option>
-                                    <option value="High">High</option>
-                                    <option value="Medium">Medium</option>
-                                    <option value="Low">Low</option>
-                                </select>
-                            </div>
                             <button type="button" id="runScanBtn" class="btn-danger">
                                 <span class="btn-text">Run Security Scan</span>
                                 <span class="spinner hidden"></span>
@@ -198,9 +188,14 @@
                                     <h2>Generated Test Cases <span id="providerBadge" class="provider-badge hidden"></span></h2>
                                     <div class="results-actions">
                                         <button id="runAllBtn" class="btn-secondary" data-tooltip="Executes all generated tests against the live API">Run All Tests</button>
-                                        <button id="exportBtn" class="btn-secondary" data-tooltip="Exports a runnable Python test file">Download Pytest Script</button>
-                                        <button id="exportPostmanBtn" class="btn-secondary">Download Postman Collection</button>
-                                        <button id="copyBtn" class="btn-secondary">Copy JSON</button>
+                                        <div class="dropdown">
+                                            <button type="button" id="exportMenuBtn" class="btn-secondary" aria-haspopup="true" aria-expanded="false">Export &#9662;</button>
+                                            <div class="dropdown-menu hidden" id="exportMenu">
+                                                <button type="button" id="exportBtn" data-tooltip="Exports a runnable Python test file">Pytest script</button>
+                                                <button type="button" id="exportPostmanBtn">Postman collection</button>
+                                                <button type="button" id="copyBtn">Copy JSON</button>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -216,8 +211,46 @@
                                     <div id="contractResults"></div>
                                 </div>
 
-                                <div class="cicd-export">
-                                    <h3>Export CI/CD Pipeline</h3>
+                                <div class="result-tabs" id="resultTabs">
+                                    <button type="button" class="result-tab active" data-cat="all">All <span class="rt-count" id="rtcAll">0</span></button>
+                                    <button type="button" class="result-tab" data-cat="positive">Positive <span class="rt-count" id="rtcPositive">0</span></button>
+                                    <button type="button" class="result-tab" data-cat="negative">Negative <span class="rt-count" id="rtcNegative">0</span></button>
+                                    <button type="button" class="result-tab" data-cat="edge">Edge <span class="rt-count" id="rtcEdge">0</span></button>
+                                    <button type="button" class="result-tab" data-cat="assertions">Assertions <span class="rt-count" id="rtcAssertions">0</span></button>
+                                </div>
+
+                                <div class="results-groups" id="resultsGroups">
+                                    <div class="result-group" data-cat="positive">
+                                        <h3 class="group-title positive">
+                                            <span class="badge">&#10003;</span> Positive Test Cases
+                                        </h3>
+                                        <div id="positiveList" class="case-list"></div>
+                                    </div>
+
+                                    <div class="result-group" data-cat="negative">
+                                        <h3 class="group-title negative">
+                                            <span class="badge">&#10007;</span> Negative Test Cases
+                                        </h3>
+                                        <div id="negativeList" class="case-list"></div>
+                                    </div>
+
+                                    <div class="result-group" data-cat="edge">
+                                        <h3 class="group-title edge">
+                                            <span class="badge">&#9889;</span> Edge Cases
+                                        </h3>
+                                        <div id="edgeList" class="case-list"></div>
+                                    </div>
+
+                                    <div class="result-group" data-cat="assertions">
+                                        <h3 class="group-title assertions">
+                                            <span class="badge">&#128170;</span> Assertions
+                                        </h3>
+                                        <div id="assertionsList" class="case-list"></div>
+                                    </div>
+                                </div>
+
+                                <details class="cicd-export">
+                                    <summary>Export CI/CD Pipeline</summary>
                                     <div class="export-format-cards" id="cicdFormatCards">
                                         <div class="export-format-card" data-format="github">
                                             <strong>GitHub Actions Workflow</strong>
@@ -242,37 +275,7 @@
                                         </div>
                                         <pre class="code-preview"><code id="cicdYaml"></code></pre>
                                     </div>
-                                </div>
-
-                                <div class="results-grid">
-                                    <div class="result-group">
-                                        <h3 class="group-title positive">
-                                            <span class="badge">&#10003;</span> Positive Test Cases
-                                        </h3>
-                                        <div id="positiveList" class="case-list"></div>
-                                    </div>
-
-                                    <div class="result-group">
-                                        <h3 class="group-title negative">
-                                            <span class="badge">&#10007;</span> Negative Test Cases
-                                        </h3>
-                                        <div id="negativeList" class="case-list"></div>
-                                    </div>
-
-                                    <div class="result-group">
-                                        <h3 class="group-title edge">
-                                            <span class="badge">&#9889;</span> Edge Cases
-                                        </h3>
-                                        <div id="edgeList" class="case-list"></div>
-                                    </div>
-
-                                    <div class="result-group">
-                                        <h3 class="group-title assertions">
-                                            <span class="badge">&#128170;</span> Assertions
-                                        </h3>
-                                        <div id="assertionsList" class="case-list"></div>
-                                    </div>
-                                </div>
+                                </details>
                             </section>
 
                             <section id="securityResults" class="hidden">
@@ -287,6 +290,13 @@
                                 <div class="results-actions sec-export-actions">
                                     <button id="exportSecMdBtn" class="btn-secondary">Export Markdown Report</button>
                                     <button id="exportSecHtmlBtn" class="btn-secondary">Export HTML Report</button>
+                                </div>
+                                <div class="result-tabs" id="severityTabs">
+                                    <button type="button" class="result-tab active" data-sev="all">All <span class="rt-count" id="sevcAll">0</span></button>
+                                    <button type="button" class="result-tab" data-sev="Critical">Critical <span class="rt-count" id="sevcCritical">0</span></button>
+                                    <button type="button" class="result-tab" data-sev="High">High <span class="rt-count" id="sevcHigh">0</span></button>
+                                    <button type="button" class="result-tab" data-sev="Medium">Medium <span class="rt-count" id="sevcMedium">0</span></button>
+                                    <button type="button" class="result-tab" data-sev="Low">Low <span class="rt-count" id="sevcLow">0</span></button>
                                 </div>
                                 <table class="findings-table">
                                     <thead>

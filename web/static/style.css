@@ -2016,3 +2016,161 @@ button:active:not(:disabled) {
     background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
     color: var(--accent-blue);
 }
+
+/* =========================================================
+   Results UX: toolbar dropdown, category/severity tabs,
+   compact case rows, collapsible CI/CD export
+   ========================================================= */
+
+/* Export dropdown */
+.dropdown { position: relative; display: inline-block; }
+.dropdown-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    min-width: 180px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+    padding: 0.25rem;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+}
+.dropdown-menu button {
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+.dropdown-menu button:hover:not(:disabled) { background: var(--bg-inset); transform: none; }
+
+/* Category / severity tabs */
+.result-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin: 0.5rem 0 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+.result-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 0.45rem 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+}
+.result-tab:hover:not(.active):not(:disabled) { color: var(--text-primary); transform: none; }
+.result-tab.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); }
+.rt-count {
+    font-size: 0.68rem;
+    font-weight: 600;
+    background: var(--bg-inset);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 0.02rem 0.38rem;
+    min-width: 1.1rem;
+    text-align: center;
+}
+.result-tab.active .rt-count {
+    background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
+    color: var(--accent-blue);
+}
+
+/* Result groups */
+.results-groups .result-group {
+    background: none;
+    box-shadow: none;
+    padding: 0;
+    margin-bottom: 1.25rem;
+}
+.results-groups .result-group:last-child { margin-bottom: 0; }
+.results-groups.single-cat .group-title { display: none; }
+
+/* Compact, expandable case rows */
+.case-item {
+    padding: 0;
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+}
+.case-item:hover { transform: none; box-shadow: none; }
+.case-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.7rem;
+    cursor: pointer;
+}
+.case-row:hover { background: var(--bg-inset); }
+.case-row .case-id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+.case-row .case-title {
+    flex: 1;
+    min-width: 0;
+    font-weight: 500;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.case-row-tags { display: inline-flex; gap: 0.25rem; flex-shrink: 0; }
+.case-row .btn-run { flex-shrink: 0; padding: 0.2rem 0.6rem; font-size: 0.75rem; }
+.case-row .chevron { flex-shrink: 0; color: var(--text-secondary); transition: transform 0.2s ease; }
+.case-item.open .chevron { transform: rotate(180deg); }
+.case-body {
+    padding: 0.25rem 0.7rem 0.7rem;
+    border-top: 1px solid var(--border-color);
+}
+.case-body .case-desc {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    margin: 0.5rem 0;
+    display: block;
+    -webkit-line-clamp: unset;
+    overflow: visible;
+}
+.case-rules {
+    margin: 0.4rem 0 0 1rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+.empty-group { padding: 0.5rem 0.2rem; font-size: 0.82rem; }
+
+/* Collapsible CI/CD export */
+details.cicd-export {
+    margin-top: 1.25rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-inset);
+}
+details.cicd-export > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 0.7rem 0.9rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+details.cicd-export > summary::-webkit-details-marker { display: none; }
+details.cicd-export > summary::before { content: '\25B8'; margin-right: 0.5rem; color: var(--text-secondary); }
+details.cicd-export[open] > summary::before { content: '\25BE'; }
+details.cicd-export[open] > summary { border-bottom: 1px solid var(--border-color); }
+details.cicd-export .export-format-cards { margin: 0.9rem; }
+details.cicd-export #cicdPreview { margin: 0 0.9rem 0.9rem; }

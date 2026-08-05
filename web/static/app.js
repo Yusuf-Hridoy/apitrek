@@ -317,11 +317,18 @@ document.addEventListener('DOMContentLoaded', () => {
             data,
             category,
             runBtn: el.querySelector('.btn-run'),
-            detailsBtn: el.querySelector('.view-details-btn'),
+            row: el.querySelector('.case-row'),
+            body: el.querySelector('.case-body'),
             detailsEl: el.querySelector('.case-details'),
         };
-        entry.runBtn.addEventListener('click', () => runSingleTest(entry));
-        entry.detailsBtn.addEventListener('click', () => entry.detailsEl.classList.toggle('hidden'));
+        entry.row.addEventListener('click', () => {
+            const nowHidden = entry.body.classList.toggle('hidden');
+            entry.el.classList.toggle('open', !nowHidden);
+        });
+        entry.runBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            runSingleTest(entry);
+        });
         caseCards.push(entry);
     }
 
@@ -360,21 +367,19 @@ document.addEventListener('DOMContentLoaded', () => {
         entry.el.classList.remove('test-pass', 'test-fail');
         entry.el.classList.add(result.passed ? 'test-pass' : 'test-fail');
 
-        // Status badge next to the test case ID
-        let badge = entry.el.querySelector('.status-badge');
-        if (!badge) {
-            badge = document.createElement('span');
-            const header = entry.el.querySelector('.case-header');
-            if (header) header.appendChild(badge);
-        }
+        // Status badge in the compact row
+        const badge = entry.el.querySelector('.status-badge');
         badge.className = `status-badge ${result.passed ? 'passed' : 'failed'}`;
         badge.textContent = result.passed ? 'PASSED' : 'FAILED';
 
         entry.detailsEl.innerHTML = buildDetailsHtml(result);
-        entry.detailsBtn.classList.remove('hidden');
-        entry.detailsEl.classList.toggle('hidden', result.passed);
-        const expectedText = result.expected_status != null ? `Expected ${result.expected_status}, ` : '';
-        entry.runBtn.textContent = `${expectedText}Got ${result.actual_status} — ${result.passed ? 'Passed' : 'Failed'}`;
+        entry.detailsEl.classList.remove('hidden');
+        // Reveal the card body so the outcome is visible; auto-expand on failure.
+        if (!result.passed) {
+            entry.body.classList.remove('hidden');
+            entry.el.classList.add('open');
+        }
+        entry.runBtn.textContent = 'Re-run';
     }
 
     async function executeOne(entry) {
@@ -408,7 +413,7 @@ document.addEventListener('DOMContentLoaded', () => {
             validateContract(result);
         } catch (err) {
             showError(err.message || 'Execution failed. Is the server running?');
-            entry.runBtn.textContent = 'Run This Test';
+            entry.runBtn.textContent = 'Run';
         } finally {
             entry.runBtn.disabled = false;
         }
@@ -489,7 +494,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const securityWarning = document.getElementById('securityWarning');
     const dismissWarningBtn = document.getElementById('dismissWarningBtn');
     const owaspCategoriesEl = document.getElementById('owaspCategories');
-    const severityFilter = document.getElementById('severityFilter');
+    let activeSeverity = 'all';
     const runScanBtn = document.getElementById('runScanBtn');
     const riskScoreFill = document.getElementById('riskScoreFill');
     const riskScoreLabel = document.getElementById('riskScoreLabel');
@@ -625,6 +630,11 @@ document.addEventListener('DOMContentLoaded', () => {
             `<span class="chip">Low: ${s.low || 0}</span>` +
             `<span class="chip">${((data.scan_duration_ms || 0) / 1000).toFixed(1)}s</span>`;
 
+        activeSeverity = 'all';
+        updateSeverityTabCounts();
+        document.querySelectorAll('#severityTabs .result-tab').forEach((t) => {
+            t.classList.toggle('active', t.dataset.sev === 'all');
+        });
         renderFindings();
         // Take over the Results panel: hide the functional empty/skeleton/results.
         emptyState.classList.add('hidden');
@@ -645,7 +655,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderFindings() {
         if (!lastScan) return;
-        const filter = severityFilter.value;
+        const filter = activeSeverity;
         const findings = (lastScan.findings || []).filter(
             (f) => filter === 'all' || f.severity === filter
         );
@@ -691,7 +701,29 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    severityFilter.addEventListener('change', renderFindings);
+    function updateSeverityTabCounts() {
+        const findings = (lastScan && lastScan.findings) || [];
+        const by = { Critical: 0, High: 0, Medium: 0, Low: 0 };
+        findings.forEach((f) => { if (by[f.severity] !== undefined) by[f.severity]++; });
+        const set = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = n; };
+        set('sevcAll', findings.length);
+        set('sevcCritical', by.Critical);
+        set('sevcHigh', by.High);
+        set('sevcMedium', by.Medium);
+        set('sevcLow', by.Low);
+    }
+
+    function setSeverity(sev) {
+        activeSeverity = sev;
+        document.querySelectorAll('#severityTabs .result-tab').forEach((t) => {
+            t.classList.toggle('active', t.dataset.sev === sev);
+        });
+        renderFindings();
+    }
+
+    document.querySelectorAll('#severityTabs .result-tab').forEach((tab) => {
+        tab.addEventListener('click', () => setSeverity(tab.dataset.sev));
+    });
 
     runScanBtn.addEventListener('click', async () => {
         hideError();
@@ -1210,17 +1242,71 @@ document.addEventListener('DOMContentLoaded', () => {
         executionSummary.classList.add('hidden');
         executionProgress.classList.add('hidden');
         contractPanel.classList.add('hidden');
-        renderCaseList(lists.positive, data.positive_test_cases || [], 'positive');
-        renderCaseList(lists.negative, data.negative_test_cases || [], 'negative');
-        renderCaseList(lists.edge, data.edge_cases || [], 'edge');
-        renderAssertions(lists.assertions, data.assertions || []);
+        const positive = data.positive_test_cases || [];
+        const negative = data.negative_test_cases || [];
+        const edge = data.edge_cases || [];
+        const assertions = data.assertions || [];
+        renderCaseList(lists.positive, positive, 'positive');
+        renderCaseList(lists.negative, negative, 'negative');
+        renderCaseList(lists.edge, edge, 'edge');
+        renderAssertions(lists.assertions, assertions);
         renderProviderBadge(data._provider);
+        updateResultTabCounts({
+            All: positive.length + negative.length + edge.length + assertions.length,
+            Positive: positive.length,
+            Negative: negative.length,
+            Edge: edge.length,
+            Assertions: assertions.length,
+        });
+        setResultCategory('all');
+    }
+
+    // --- Result category tabs ---
+    const resultGroups = document.querySelectorAll('#resultsGroups .result-group');
+    const resultsGroupsEl = document.getElementById('resultsGroups');
+
+    function updateResultTabCounts(counts) {
+        Object.entries(counts).forEach(([label, n]) => {
+            const el = document.getElementById('rtc' + label);
+            if (el) el.textContent = n;
+        });
+    }
+
+    function setResultCategory(cat) {
+        document.querySelectorAll('#resultTabs .result-tab').forEach((t) => {
+            t.classList.toggle('active', t.dataset.cat === cat);
+        });
+        resultGroups.forEach((g) => {
+            g.classList.toggle('hidden', cat !== 'all' && g.dataset.cat !== cat);
+        });
+        if (resultsGroupsEl) resultsGroupsEl.classList.toggle('single-cat', cat !== 'all');
+    }
+
+    document.querySelectorAll('#resultTabs .result-tab').forEach((tab) => {
+        tab.addEventListener('click', () => setResultCategory(tab.dataset.cat));
+    });
+
+    // --- Export dropdown ---
+    const exportMenuBtn = document.getElementById('exportMenuBtn');
+    const exportMenu = document.getElementById('exportMenu');
+    if (exportMenuBtn && exportMenu) {
+        exportMenuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const nowHidden = exportMenu.classList.toggle('hidden');
+            exportMenuBtn.setAttribute('aria-expanded', String(!nowHidden));
+        });
+        document.addEventListener('click', () => {
+            if (!exportMenu.classList.contains('hidden')) {
+                exportMenu.classList.add('hidden');
+                exportMenuBtn.setAttribute('aria-expanded', 'false');
+            }
+        });
     }
 
     function renderCaseList(container, cases, type) {
         container.innerHTML = '';
         if (!cases.length) {
-            container.innerHTML = '<p class="case-desc">No cases generated.</p>';
+            container.innerHTML = '<p class="case-desc empty-group">No cases generated.</p>';
             return;
         }
 
@@ -1233,31 +1319,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
             let extraTags = '';
             if (c.request?.method && c.request.method !== document.getElementById('method').value) {
-                extraTags += `<span class="tag">${c.request.method}</span>`;
+                extraTags += `<span class="tag">${escapeHtml(c.request.method)}</span>`;
             }
 
             const validationRules = c.expected?.validation_rules;
             let rulesHtml = '';
             if (Array.isArray(validationRules) && validationRules.length) {
-                rulesHtml = `<ul style="margin:0.5rem 0 0 1rem;font-size:0.85rem;color:var(--text-secondary);">${validationRules.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>`;
+                rulesHtml = `<ul class="case-rules">${validationRules.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>`;
             }
 
             el.innerHTML = `
-                <div class="case-header">
+                <div class="case-row">
+                    <span class="status-badge pending">Pending</span>
                     <span class="case-id">${escapeHtml(c.id || '')}</span>
                     <span class="case-title">${escapeHtml(c.title || 'Untitled')}</span>
-                    <span class="status-badge pending">Pending</span>
+                    <span class="case-row-tags">${statusTag}${extraTags}</span>
+                    <button type="button" class="btn-run">Run</button>
+                    <span class="chevron">&#9662;</span>
                 </div>
-                <div class="case-meta">
-                    ${statusTag}
-                    ${extraTags}
+                <div class="case-body hidden">
+                    <div class="case-desc">${escapeHtml(c.description || '')}</div>
+                    ${rulesHtml}
+                    <div class="case-details hidden"></div>
                 </div>
-                <div class="case-desc">${escapeHtml(c.description || '')}</div>
-                <div class="case-actions">
-                    <button type="button" class="btn-run">Run This Test</button>
-                    <button type="button" class="btn-run view-details-btn${rulesHtml ? '' : ' hidden'}">View Details</button>
-                </div>
-                <div class="case-details hidden">${rulesHtml}</div>
             `;
             container.appendChild(el);
             registerCaseCard(el, c, type);
@@ -1267,7 +1351,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderAssertions(container, assertions) {
         container.innerHTML = '';
         if (!assertions.length) {
-            container.innerHTML = '<p class="case-desc">No assertions generated.</p>';
+            container.innerHTML = '<p class="case-desc empty-group">No assertions generated.</p>';
             return;
         }
 
@@ -1280,19 +1364,16 @@ document.addEventListener('DOMContentLoaded', () => {
             const categoryTag = `<span class="tag">${escapeHtml(a.category || 'general')}</span>`;
 
             el.innerHTML = `
-                <div class="case-header">
-                    <span class="case-title">${escapeHtml(a.rule || 'Untitled assertion')}</span>
+                <div class="case-row">
                     <span class="status-badge pending">Pending</span>
+                    <span class="case-title">${escapeHtml(a.rule || 'Untitled assertion')}</span>
+                    <span class="case-row-tags">${categoryTag}${severityTag}</span>
+                    <button type="button" class="btn-run">Run</button>
+                    <span class="chevron">&#9662;</span>
                 </div>
-                <div class="case-meta">
-                    ${categoryTag}
-                    ${severityTag}
+                <div class="case-body hidden">
+                    <div class="case-details hidden"></div>
                 </div>
-                <div class="case-actions">
-                    <button type="button" class="btn-run">Run This Test</button>
-                    <button type="button" class="btn-run view-details-btn hidden">View Details</button>
-                </div>
-                <div class="case-details hidden"></div>
             `;
             container.appendChild(el);
             registerCaseCard(el, a, 'assertion');
