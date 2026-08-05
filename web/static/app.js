@@ -22,6 +22,38 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastSessionId = null;
     let caseCards = [];
 
+    // Trigger a browser download for a Blob.
+    function triggerDownload(blob, filename) {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+    }
+
+    // POST JSON to an endpoint that returns a file, then download the response.
+    async function downloadFromApi(url, body, filename, successMsg) {
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                showError(data.detail || `Export failed (${res.status})`);
+                return;
+            }
+            triggerDownload(await res.blob(), filename);
+            showToast(successMsg, 'success');
+        } catch (err) {
+            showError('Export failed. Please make sure the server is running.');
+        }
+    }
+
     if (autoFetchCheckbox && sampleResponseGroup) {
         autoFetchCheckbox.addEventListener('change', () => {
             sampleResponseGroup.classList.toggle('hidden', autoFetchCheckbox.checked);
@@ -176,89 +208,29 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    exportBtn.addEventListener('click', async () => {
+    exportBtn.addEventListener('click', () => {
         if (!lastResult) {
             showError('Please generate test cases first before exporting.');
             return;
         }
-
-        const endpoint = document.getElementById('endpoint').value.trim();
-        const method = document.getElementById('method').value;
-
-        try {
-            const res = await fetch('/export/python', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    endpoint,
-                    method,
-                    test_data: lastResult,
-                }),
-            });
-
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                const msg = data.detail || `Export failed (${res.status})`;
-                showError(msg);
-                return;
-            }
-
-            const blob = await res.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'test_api.py';
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            window.URL.revokeObjectURL(url);
-            showToast('Pytest script exported.', 'success');
-        } catch (err) {
-            showError('Export failed. Please make sure the server is running.');
-        }
+        downloadFromApi('/export/python', {
+            endpoint: document.getElementById('endpoint').value.trim(),
+            method: document.getElementById('method').value,
+            test_data: lastResult,
+        }, 'test_api.py', 'Pytest script exported.');
     });
 
     const exportPostmanBtn = document.getElementById('exportPostmanBtn');
-    exportPostmanBtn.addEventListener('click', async () => {
+    exportPostmanBtn.addEventListener('click', () => {
         if (!lastResult) {
             showError('Please generate test cases first before exporting.');
             return;
         }
-
-        const endpoint = document.getElementById('endpoint').value.trim();
-        const method = document.getElementById('method').value;
-
-        try {
-            const res = await fetch('/export/postman', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    endpoint,
-                    method,
-                    test_data: lastResult,
-                }),
-            });
-
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                const msg = data.detail || `Export failed (${res.status})`;
-                showError(msg);
-                return;
-            }
-
-            const blob = await res.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'collection.json';
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            window.URL.revokeObjectURL(url);
-            showToast('Postman collection exported.', 'success');
-        } catch (err) {
-            showError('Export failed. Please make sure the server is running.');
-        }
+        downloadFromApi('/export/postman', {
+            endpoint: document.getElementById('endpoint').value.trim(),
+            method: document.getElementById('method').value,
+            test_data: lastResult,
+        }, 'collection.json', 'Postman collection exported.');
     });
 
     const cicdPreview = document.getElementById('cicdPreview');
@@ -329,15 +301,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     cicdDownloadBtn.addEventListener('click', () => {
         if (!cicdContent) return;
-        const blob = new Blob([cicdContent], { type: 'text/yaml' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = cicdFile || 'pipeline.yml';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
+        triggerDownload(new Blob([cicdContent], { type: 'text/yaml' }), cicdFile || 'pipeline.yml');
         showToast('Pipeline config exported.', 'success');
     });
 
@@ -786,39 +750,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    async function exportSecurityReport(format) {
+    function exportSecurityReport(format) {
         if (!lastScan) {
             showError('Run a security scan first.');
             return;
         }
-        try {
-            const res = await fetch('/api/security/report', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    format,
-                    endpoint: document.getElementById('endpoint').value.trim(),
-                    scan: lastScan,
-                }),
-            });
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                showError(data.detail || `Export failed (${res.status})`);
-                return;
-            }
-            const blob = await res.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = format === 'markdown' ? 'security-report.md' : 'security-report.html';
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            window.URL.revokeObjectURL(url);
-            showToast('Security report exported.', 'success');
-        } catch (err) {
-            showError('Export failed. Please make sure the server is running.');
-        }
+        downloadFromApi('/api/security/report', {
+            format,
+            endpoint: document.getElementById('endpoint').value.trim(),
+            scan: lastScan,
+        }, format === 'markdown' ? 'security-report.md' : 'security-report.html', 'Security report exported.');
     }
 
     exportSecMdBtn.addEventListener('click', () => exportSecurityReport('markdown'));

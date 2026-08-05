@@ -1,6 +1,7 @@
 """
 FastAPI routes for the OWASP API security scanner.
 """
+import logging
 import sys
 import time
 from pathlib import Path
@@ -27,6 +28,7 @@ from exports.security_report_generator import (
 from core.database import save_session, save_test_cases
 
 router = APIRouter(tags=["security"])
+logger = logging.getLogger(__name__)
 
 
 class ScanRequest(BaseModel):
@@ -132,7 +134,7 @@ def security_scan(payload: ScanRequest) -> Dict[str, Any]:
         ])
         response["_session_id"] = session_id
     except Exception as e:
-        print(f"[history] Failed to save security scan for {endpoint}: {e}")
+        logger.warning("Failed to save security scan for %s: %s", endpoint, e)
 
     return response
 

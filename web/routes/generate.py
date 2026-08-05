@@ -2,6 +2,7 @@
 FastAPI route for generating API test cases.
 Reuses Phase 1 core engine.
 """
+import logging
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -17,6 +18,7 @@ from core.live_fetcher import fetch_api_response, LiveFetchError
 from core.database import save_session, save_test_cases
 
 router = APIRouter(tags=["generate"])
+logger = logging.getLogger(__name__)
 
 
 def _cases_for_db(result: Dict[str, Any]) -> list:
@@ -133,6 +135,6 @@ def generate_tests(payload: GenerateRequest) -> Dict[str, Any]:
         save_test_cases(session_id, _cases_for_db(result))
         result["_session_id"] = session_id
     except Exception as e:
-        print(f"[history] Failed to save session for {endpoint}: {e}")
+        logger.warning("Failed to save session for %s: %s", endpoint, e)
 
     return result
