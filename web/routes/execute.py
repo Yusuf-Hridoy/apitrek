@@ -58,7 +58,7 @@ def _build_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 @router.post("/execute-tests")
-async def execute_tests(payload: ExecuteRequest) -> Dict[str, Any]:
+def execute_tests(payload: ExecuteRequest) -> Dict[str, Any]:
     """Execute a suite of test cases and return results with a summary."""
     if not payload.endpoint or not payload.endpoint.strip():
         raise HTTPException(status_code=422, detail="Endpoint is required.")
@@ -89,7 +89,7 @@ async def execute_tests(payload: ExecuteRequest) -> Dict[str, Any]:
 
 
 @router.post("/execute-single")
-async def execute_single(payload: ExecuteSingleRequest) -> Dict[str, Any]:
+def execute_single(payload: ExecuteSingleRequest) -> Dict[str, Any]:
     """Execute a single test case and return its result."""
     if not payload.endpoint or not payload.endpoint.strip():
         raise HTTPException(status_code=422, detail="Endpoint is required.")

@@ -70,7 +70,7 @@ async def list_owasp_categories() -> List[Dict[str, str]]:
 
 
 @router.post("/security/scan")
-async def security_scan(payload: ScanRequest) -> Dict[str, Any]:
+def security_scan(payload: ScanRequest) -> Dict[str, Any]:
     """Generate and execute OWASP security tests against the endpoint."""
     if not payload.endpoint or not payload.endpoint.strip():
         raise HTTPException(status_code=422, detail="Endpoint is required.")

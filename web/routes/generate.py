@@ -84,7 +84,7 @@ class GenerateRequest(BaseModel):
 
 
 @router.post("/generate-tests")
-async def generate_tests(payload: GenerateRequest) -> Dict[str, Any]:
+def generate_tests(payload: GenerateRequest) -> Dict[str, Any]:
     """
     Generate structured API test cases using the Phase 1 AI engine.
     """

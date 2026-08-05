@@ -59,7 +59,7 @@ def _rebuild_executor_cases(session: Dict[str, Any]) -> list:
 
 
 @router.post("/history/sessions/{session_id}/rerun")
-async def rerun_session(session_id: int) -> Dict[str, Any]:
+def rerun_session(session_id: int) -> Dict[str, Any]:
     """Re-execute a stored session's test cases against the live API."""
     session = get_session(session_id)
     if session is None:
