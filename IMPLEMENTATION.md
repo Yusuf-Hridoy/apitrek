@@ -13,12 +13,17 @@ Open http://localhost:8000
 
 ## Project Overview
 
-An AI-powered tool that generates API test cases, edge cases, and validation rules from API endpoints using Mistral AI. The project was built in phases:
+**API Sentinel** — an AI-powered API testing suite that generates test cases, edge
+cases, and validation rules from API endpoints, then lets you execute, secure, and
+export them. The project was built in phases:
 
 - **Phase 1:** Core CLI AI engine
 - **Phase 2:** Lightweight web UI on top of the engine
 - **Phase 4:** Automatic live API response fetching
 - **Phase 5:** Pytest automation script export
+- **Phase 6+ (see below):** Live test execution, OWASP API security scanning,
+  OpenAPI import & contract testing, session history (SQLite), Postman + CI/CD
+  export, and a multi-provider AI router with automatic failover.
 
 ---
 
@@ -26,13 +31,15 @@ An AI-powered tool that generates API test cases, edge cases, and validation rul
 
 | Layer | Technology | Reason |
 |-------|-----------|--------|
-| AI Provider | Mistral AI (`mistral-large-latest`) | Powerful reasoning for QA scenarios |
+| AI Provider | Mistral (primary) + Groq + GitHub Models | Failover across providers; Mistral default (`mistral-large-latest`) |
 | HTTP Client | `requests` (direct REST API) | Avoided SDK due to Python 3.14 compatibility issues |
 | Backend | FastAPI | Lightweight, async, automatic OpenAPI docs |
 | Frontend | Vanilla HTML + CSS + JS | No build step, fast MVP, easy to maintain |
 | Server | Uvicorn | ASGI server for FastAPI |
+| Persistence | SQLite (`sqlite3`) | Zero-config session/test/result history |
+| Spec parsing | `PyYAML` | Parse OpenAPI specs supplied as YAML |
 | Config | `python-dotenv` | Secure API key handling via `.env` |
-| Testing | `pytest` | Unit tests for all core modules |
+| Testing | `pytest` | Unit tests for all core modules (175 tests) |
 
 ---
 
@@ -389,49 +396,121 @@ Total test count: **53** (42 prior + 11 Phase 5)
 
 ---
 
+## Phase 6+ — Execution, Security, Contracts, History & More
+
+After Phase 5 the tool grew from an "AI test suggestion + export" utility into a
+full testing suite. Each capability reuses the Phase 1 core and follows the same
+rules (never crash the caller, deterministic exporters, defensive parsing).
+
+### Live Test Execution
+- `core/test_executor.py` — executes generated cases against the real API,
+  mutating requests by category (negative: break auth / drop a field / wrong
+  Content-Type; edge: boundary values) and checking status codes + validation
+  rules. Returns structured per-test results; never raises.
+- `web/routes/execute.py` — `POST /api/execute-single` and `POST /api/execute-tests`
+  (suite run with a pass/fail summary). The UI runs tests individually or via
+  **Run All Tests** with a live progress bar.
+
+### OWASP API Security Scanning
+- `core/security_scanner.py` — probes the OWASP API Top-10 (2023): API1, API2,
+  API5, API6, API7, API8, API10. Produces findings (severity, payload used,
+  remediation) and a 0–100 risk score.
+- `web/routes/security.py` — `GET /api/security/owasp-categories`,
+  `POST /api/security/scan`, `POST /api/security/report`.
+- `exports/security_report_generator.py` — Markdown / HTML report export.
+- UI: a dedicated **Security Scanning** mode with a category picker, an
+  "authorized testing only" warning, a risk gauge, and a filterable findings table.
+
+### OpenAPI Import & Contract Testing
+- `core/openapi_parser.py` — parses OpenAPI 3.0/3.1 (JSON or YAML) into endpoints,
+  base URL, request/response schemas.
+- `core/contract_tester.py` — validates a live response against the documented
+  schema and reports violations by JSON path.
+- `web/routes/openapi.py` — `POST /api/openapi/parse`,
+  `POST /api/openapi/validate-response`. UI: import modal + endpoint explorer;
+  contract validation runs automatically after a test executes.
+
+### Session History (SQLite)
+- `core/database.py` — sessions, test cases, and execution results in SQLite.
+  Includes a `case_ref` column storing the original LLM case id so stored
+  execution results can be matched back to their cases on reload; `init_db()`
+  runs an idempotent migration to add it to existing databases.
+- `web/routes/history.py` — list / read / rerun / delete sessions.
+- UI: a **History** view (functional vs. security tabs). **Load** restores the
+  full session — cases *and* prior PASS/FAIL badges — without another LLM call;
+  **Rerun** re-executes a stored suite live. Persistence is best-effort and never
+  blocks generation.
+
+### Postman & CI/CD Export
+- `exports/postman_generator.py` — Postman Collection v2.1 with `pm.test(...)`
+  scripts (`POST /export/postman`).
+- `exports/cicd_generator.py` — GitHub Actions, GitLab CI, and Azure Pipelines
+  configs (`POST /api/export/cicd`).
+
+### Multi-Provider AI Router
+- `llm/ai_router.py` — tries the primary provider (Mistral) and falls back to Groq
+  then GitHub Models on any failure; providers without a configured key are
+  skipped. `generate_test_cases()` uses it by default and records the winning
+  provider in `_provider` for the UI badge.
+- `llm/groq_client.py`, `llm/github_models_client.py` — fallback clients with the
+  same `send_prompt(...)` interface as the Mistral client.
+
+**Current test count: 175** (one test file per module).
+
+---
+
 ## File Structure
 
 ```
 api-testing-assistant/
 ├── core/
-│   ├── __init__.py
 │   ├── analyzer.py           # Response/endpoint metadata extraction
 │   ├── generator.py          # Main orchestrator: prompt → AI → JSON
-│   └── live_fetcher.py       # Live API HTTP request fetcher (Phase 4)
+│   ├── live_fetcher.py       # Live API HTTP request fetcher
+│   ├── test_executor.py      # Executes test cases against the real API
+│   ├── security_scanner.py   # OWASP API Top-10 probes + risk scoring
+│   ├── openapi_parser.py     # OpenAPI 3.0/3.1 spec parsing
+│   ├── contract_tester.py    # Response-vs-schema contract validation
+│   └── database.py           # SQLite persistence (sessions/cases/results)
 ├── llm/
-│   ├── __init__.py
-│   ├── mistral_client.py     # HTTP client with retries
+│   ├── ai_router.py          # Multi-provider router with failover
+│   ├── mistral_client.py     # Mistral client (raw requests, retries)
+│   ├── groq_client.py        # Groq fallback client
+│   ├── github_models_client.py  # GitHub Models fallback client
 │   └── prompt_templates.py   # Structured system + user prompts
 ├── cli/
-│   ├── __init__.py
-│   └── app.py                # argparse CLI interface
+│   └── app.py                # argparse CLI interface (functional generation)
 ├── exports/
-│   ├── __init__.py
-│   └── python_test_generator.py  # Pytest script generator (Phase 5)
+│   ├── python_test_generator.py     # Pytest script generator
+│   ├── postman_generator.py         # Postman collection v2.1
+│   ├── cicd_generator.py            # GitHub/GitLab/Azure pipelines
+│   └── security_report_generator.py # Markdown/HTML security reports
 ├── web/
-│   ├── app.py                # FastAPI entry point
+│   ├── app.py                # FastAPI entry point (lifespan runs init_db)
 │   ├── routes/
-│   │   ├── generate.py       # POST /generate-tests (Phase 4 enhanced)
-│   │   └── export.py         # POST /export/python (Phase 5)
+│   │   ├── generate.py       # POST /generate-tests
+│   │   ├── execute.py        # POST /api/execute-single, /api/execute-tests
+│   │   ├── security.py       # /api/security/* (scan, categories, report)
+│   │   ├── openapi.py        # /api/openapi/* (parse, validate-response)
+│   │   ├── cicd.py           # POST /api/export/cicd
+│   │   ├── export.py         # POST /export/python, /export/postman
+│   │   └── history.py        # /api/history/sessions (list/read/rerun/delete)
 │   ├── templates/
-│   │   └── index.html        # Web UI markup (Phase 5 enhanced)
+│   │   └── index.html        # Single-page Web UI (served via FileResponse)
 │   └── static/
-│       ├── style.css         # Responsive styles (Phase 5 enhanced)
-│       └── app.js            # Frontend fetch + render logic (Phase 5 enhanced)
+│       ├── style.css         # Responsive styles
+│       ├── app.js            # Frontend fetch + render logic
+│       └── darkmode.js       # Theme toggle
 ├── examples/
 │   ├── example_input.json
 │   └── example_run.py
-├── tests/
-│   ├── __init__.py
-│   ├── test_analyzer.py
-│   ├── test_generator.py
-│   ├── test_live_fetcher.py  # Phase 4 fetcher tests
-│   ├── test_mistral_client.py
-│   └── test_python_test_generator.py  # Phase 5 export tests
+├── data/                     # SQLite DB (created at runtime)
+├── tests/                    # One test file per module (175 tests)
 ├── .env.example
 ├── requirements.txt
 ├── README.md
-└── IMPLEMENTATION.md         # This file
+├── IMPLEMENTATION.md         # This file
+└── codestructure.md          # Architecture/context reference
 ```
 
 ---
@@ -444,10 +523,10 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env and add your MISTRAL_API_KEY
+# Edit .env and add your MISTRAL_API_KEY (Groq / GitHub Models keys optional)
 ```
 
-### Web UI (Phase 5)
+### Web UI
 ```bash
 ./venv/bin/python -m uvicorn web.app:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -486,3 +565,9 @@ Open http://localhost:8000
 - [x] **Scripts run successfully with pytest (Phase 5)**
 - [x] **Generated assertions are usable (Phase 5)**
 - [x] **Export works directly from UI (Phase 5)**
+- [x] **User can execute generated tests live against the real API (Phase 6+)**
+- [x] **User can scan an endpoint against the OWASP API Top-10 (Phase 6+)**
+- [x] **User can import an OpenAPI spec and contract-test responses (Phase 6+)**
+- [x] **Sessions are saved to history and can be reloaded / rerun (Phase 6+)**
+- [x] **User can export Postman collections and CI/CD pipelines (Phase 6+)**
+- [x] **AI provider fails over automatically (Mistral → Groq → GitHub) (Phase 6+)**

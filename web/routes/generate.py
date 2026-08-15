@@ -38,6 +38,9 @@ def _cases_for_db(result: Dict[str, Any]) -> list:
                 "expected_status": expected.get("status_code"),
                 "assertions": expected.get("validation_rules"),
                 "payload": case.get("request"),
+                # Original LLM id (e.g. "TC-POS-01") — lets history reload match
+                # stored execution results back to their restored cards.
+                "case_ref": case.get("id"),
             })
     for assertion in result.get("assertions") or []:
         rows.append({

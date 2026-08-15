@@ -195,7 +195,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     copyBtn.addEventListener('click', () => {
         if (!lastResult) return;
-        const json = JSON.stringify(lastResult, null, 2);
+        // Strip internal underscore-prefixed keys (_session_id, _provider, _error,
+        // nested _dbId) at every depth so the copied JSON is clean, portable output.
+        const stripInternal = (key, value) => (key.startsWith('_') ? undefined : value);
+        const json = JSON.stringify(lastResult, stripInternal, 2);
         navigator.clipboard.writeText(json).then(() => {
             const original = copyBtn.textContent;
             copyBtn.textContent = 'Copied!';
@@ -1092,6 +1095,82 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Rebuild the generation-shaped result object from stored (flattened) test
+    // case rows so the results panel can be re-rendered without another LLM call.
+    function reshapeStoredCases(testCases) {
+        const result = {
+            positive_test_cases: [],
+            negative_test_cases: [],
+            edge_cases: [],
+            assertions: [],
+        };
+        const catKey = {
+            positive: 'positive_test_cases',
+            negative: 'negative_test_cases',
+            edge: 'edge_cases',
+        };
+        (testCases || []).forEach((tc) => {
+            if (tc.category === 'assertion') {
+                // Reverse of generate.py _cases_for_db: title=rule, description=category.
+                // ids are carried (not shown for assertions) so stored execution
+                // results can be matched back on restore. Assertions have no LLM
+                // id, so the DB row id is the only key available.
+                result.assertions.push({
+                    id: String(tc.id),
+                    _dbId: String(tc.id),
+                    category: tc.description || 'general',
+                    rule: tc.title || '',
+                    severity: tc.severity || 'medium',
+                });
+                return;
+            }
+            const key = catKey[tc.category] || 'positive_test_cases';
+            const expected = {};
+            if (tc.expected_status !== null && tc.expected_status !== undefined) {
+                expected.status_code = tc.expected_status;
+            }
+            if (Array.isArray(tc.assertions) && tc.assertions.length) {
+                expected.validation_rules = tc.assertions;
+            }
+            result[key].push({
+                // Prefer the original LLM id (e.g. "TC-POS-01") so this matches the
+                // fresh-generate shape, live-run results, and future reruns. _dbId
+                // is kept as a fallback to match legacy reruns keyed by DB row id.
+                id: String(tc.case_ref || tc.id),
+                _dbId: String(tc.id),
+                title: tc.title || 'Untitled',
+                description: tc.description || '',
+                expected,
+                request: tc.payload || undefined,
+            });
+        });
+        return result;
+    }
+
+    // Re-apply stored PASS/FAIL results to restored cards. Best-effort: only
+    // results keyed by the DB row id (i.e. history reruns) match; unmatched
+    // cards simply stay "Pending" rather than showing anything misleading.
+    function applyStoredExecutionResults(execResults) {
+        if (!Array.isArray(execResults) || !execResults.length) return;
+        const byId = {};
+        execResults.forEach((r) => { byId[String(r.test_case_id)] = r; });
+        caseCards.forEach((entry) => {
+            // Match by the original LLM id first (live runs / new reruns), then
+            // fall back to the DB row id (legacy reruns).
+            const r = byId[String(entry.data.id)] ||
+                (entry.data._dbId ? byId[String(entry.data._dbId)] : null);
+            if (!r) return;
+            applyExecutionResult(entry, {
+                passed: !!r.passed,
+                expected_status: entry.data.expected ? entry.data.expected.status_code ?? null : null,
+                actual_status: r.actual_status,
+                assertion_results: [],
+                actual_response_preview: r.actual_response || '',
+                error_message: r.error_message || null,
+            });
+        });
+    }
+
     async function loadSession(id, mode) {
         try {
             const res = await fetch(`/api/history/sessions/${id}`);
@@ -1102,11 +1181,38 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             document.getElementById('endpoint').value = s.endpoint || '';
             document.getElementById('method').value = s.method || 'GET';
-            document.getElementById('headers').value = s.headers ? JSON.stringify(s.headers, null, 2) : '';
-            document.getElementById('requestBody').value = s.body ? JSON.stringify(s.body, null, 2) : '';
-            document.getElementById('sampleResponse').value = s.sample_response ? JSON.stringify(s.sample_response, null, 2) : '';
-            goToTesting(mode === 'security' ? 'security' : 'functional');
-            showToast('Session loaded into the form.', 'success');
+            const headersJson = s.headers ? JSON.stringify(s.headers, null, 2) : '';
+            const bodyJson = s.body ? JSON.stringify(s.body, null, 2) : '';
+            const sampleJson = s.sample_response ? JSON.stringify(s.sample_response, null, 2) : '';
+            document.getElementById('headers').value = headersJson;
+            document.getElementById('requestBody').value = bodyJson;
+            document.getElementById('sampleResponse').value = sampleJson;
+            // Credentials (in the URL, headers, body, or sample response) are redacted
+            // before storage — warn the user they must be re-entered before running
+            // authenticated requests against this session.
+            if (((s.endpoint || '') + headersJson + bodyJson + sampleJson).includes('***REDACTED***')) {
+                document.getElementById('advancedFields').open = true;
+                showToast('Stored credentials were redacted — re-enter them to run authenticated requests.', 'info');
+            }
+
+            const isSecurity = mode === 'security';
+            goToTesting(isSecurity ? 'security' : 'functional');
+
+            // Restore the generated test cases (and any run results) so the user
+            // sees them instantly instead of having to regenerate. Security scan
+            // results aren't reconstructable from stored rows — form-only for now.
+            const cases = s.test_cases || [];
+            if (!isSecurity && cases.length) {
+                const restored = reshapeStoredCases(cases);
+                lastResult = restored;
+                lastSessionId = id;
+                renderResults(restored);
+                showResults();
+                applyStoredExecutionResults(s.execution_results);
+                showToast('Session restored — cases and results loaded.', 'success');
+            } else {
+                showToast('Session loaded into the form.', 'success');
+            }
         } catch (err) {
             showToast('Could not load session.', 'error');
         }

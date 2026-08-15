@@ -12,6 +12,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "api_sentinel.db"
@@ -56,7 +57,8 @@ def init_db() -> None:
                 assertions_json TEXT,
                 payload_json TEXT,
                 owasp_category TEXT,
-                severity TEXT
+                severity TEXT,
+                case_ref TEXT
             );
 
             CREATE TABLE IF NOT EXISTS execution_results (
@@ -74,10 +76,121 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_test_cases_session ON test_cases(session_id);
             CREATE INDEX IF NOT EXISTS idx_results_session ON execution_results(session_id);
         """)
+        _migrate_add_column(conn, "test_cases", "case_ref", "TEXT")
+
+
+def _migrate_add_column(
+    conn: sqlite3.Connection, table: str, column: str, col_type: str
+) -> None:
+    """Add a column to an existing table if it isn't already present (idempotent)."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+REDACTED = "***REDACTED***"
+
+# Substrings (case-insensitive) that mark a header as carrying a secret. Kept
+# broad on purpose — over-redacting a benign header is harmless, leaking a token
+# to disk is not.
+_SENSITIVE_HEADER_HINTS = (
+    "authorization", "auth", "cookie", "token", "secret", "password", "passwd",
+    "pwd", "api-key", "apikey", "api_key", "credential", "x-csrf", "session",
+    "access-key", "private-key", "bearer",
+)
+
+
+def redact_headers(headers: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    Return a copy of ``headers`` with sensitive values masked as ``REDACTED``.
+
+    Header names are preserved so history stays intelligible; only the values of
+    credential-bearing headers (Authorization, Cookie, API keys, tokens, ...) are
+    replaced. Non-dict input is returned unchanged.
+    """
+    if not isinstance(headers, dict):
+        return headers
+    return {
+        key: (REDACTED if any(h in str(key).lower() for h in _SENSITIVE_HEADER_HINTS) else value)
+        for key, value in headers.items()
+    }
+
+
+# Body/response field names that carry secrets. `_CONTAINS` is matched as a
+# substring of the normalized (lowercased, alphanumeric-only) key; `_EXACT` must
+# match the whole normalized key. Bodies are test *input* reused by rerun, so this
+# set is deliberately tighter than the header set to avoid corrupting benign data.
+_SENSITIVE_BODY_CONTAINS = (
+    "password", "passwd", "passphrase", "secret", "token", "apikey", "accesskey",
+    "privatekey", "clientsecret", "credential", "authorization",
+)
+_SENSITIVE_BODY_EXACT = {"pwd", "auth", "otp", "totp", "cvv", "pin"}
+
+
+def _is_sensitive_body_key(key: Any) -> bool:
+    norm = "".join(ch for ch in str(key).lower() if ch.isalnum())
+    if norm in _SENSITIVE_BODY_EXACT:
+        return True
+    return any(marker in norm for marker in _SENSITIVE_BODY_CONTAINS)
+
+
+def redact_body(value: Any) -> Any:
+    """
+    Recursively mask credential-bearing fields in a JSON body/response.
+
+    Walks nested objects and arrays; any dict key that looks like a secret
+    (password, token, api_key, client_secret, ...) has its value replaced with
+    ``REDACTED``. Non-container values pass through unchanged.
+    """
+    if isinstance(value, dict):
+        return {
+            k: (REDACTED if _is_sensitive_body_key(k) else redact_body(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_body(item) for item in value]
+    return value
+
+
+# Query-param names that carry secrets in a URL. Reuses the body markers plus
+# short bare names common in API URLs (?key=, ?sig=, ?sas=).
+_SENSITIVE_QUERY_EXACT = {"key", "sig", "signature", "sas"}
+
+
+def _is_sensitive_query_key(key: str) -> bool:
+    norm = "".join(ch for ch in str(key).lower() if ch.isalnum())
+    return norm in _SENSITIVE_QUERY_EXACT or _is_sensitive_body_key(key)
+
+
+def redact_url(url: Any) -> Any:
+    """
+    Mask credential-bearing query-string values in a URL.
+
+    The scheme, host, and path are left untouched; only the values of sensitive
+    query params (api_key, token, key, sig, ...) are replaced with ``REDACTED``.
+    URLs with no query string, or none whose params look sensitive, are returned
+    byte-for-byte unchanged.
+    """
+    if not isinstance(url, str) or "?" not in url:
+        return url
+    try:
+        parts = urlsplit(url)
+        if not parts.query:
+            return url
+        pairs = parse_qsl(parts.query, keep_blank_values=True)
+        if not any(_is_sensitive_query_key(k) for k, _ in pairs):
+            return url
+        redacted = [
+            (k, REDACTED if _is_sensitive_query_key(k) else v) for k, v in pairs
+        ]
+        # safe="*" keeps the REDACTED marker readable (not percent-encoded).
+        return urlunsplit(parts._replace(query=urlencode(redacted, safe="*")))
+    except Exception:
+        return url
 
 
 def save_session(
@@ -88,7 +201,14 @@ def save_session(
     sample_response: Optional[Any] = None,
     mode: str = "functional",
 ) -> int:
-    """Insert a session row and return its id."""
+    """
+    Insert a session row and return its id.
+
+    Sensitive values are redacted before storage so credentials never land in the
+    database: header values (bearer tokens, API keys, cookies), credential-like
+    fields inside the request body and sample response (password, token, ...), and
+    secret query-string params in the endpoint URL (?api_key=..., ?sig=...).
+    """
     with _connect() as conn:
         cursor = conn.execute(
             """
@@ -97,11 +217,11 @@ def save_session(
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                endpoint,
+                redact_url(endpoint),
                 method,
-                json.dumps(headers) if headers is not None else None,
-                json.dumps(body) if body is not None else None,
-                json.dumps(sample_response) if sample_response is not None else None,
+                json.dumps(redact_headers(headers)) if headers is not None else None,
+                json.dumps(redact_body(body)) if body is not None else None,
+                json.dumps(redact_body(sample_response)) if sample_response is not None else None,
                 _now(),
                 mode,
             ),
@@ -113,7 +233,10 @@ def save_test_cases(session_id: int, test_cases: List[Dict[str, Any]]) -> int:
     """
     Persist test cases for a session. Each dict may carry:
     category, title, description, expected_status, assertions, payload,
-    owasp_category, severity. Returns rows inserted.
+    owasp_category, severity, case_ref. Returns rows inserted.
+
+    ``case_ref`` is the original LLM-assigned case id (e.g. "TC-POS-01"); it lets
+    stored execution results be matched back to their cases on history reload.
     """
     rows = [
         (
@@ -126,6 +249,7 @@ def save_test_cases(session_id: int, test_cases: List[Dict[str, Any]]) -> int:
             json.dumps(tc.get("payload")) if tc.get("payload") is not None else None,
             tc.get("owasp_category"),
             tc.get("severity"),
+            tc.get("case_ref"),
         )
         for tc in test_cases
     ]
@@ -136,8 +260,8 @@ def save_test_cases(session_id: int, test_cases: List[Dict[str, Any]]) -> int:
             """
             INSERT INTO test_cases (session_id, category, title, description,
                                     expected_status, assertions_json, payload_json,
-                                    owasp_category, severity)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    owasp_category, severity, case_ref)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )

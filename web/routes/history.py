@@ -49,7 +49,9 @@ def _rebuild_executor_cases(session: Dict[str, Any]) -> list:
         if tc.get("assertions"):
             expected["validation_rules"] = tc["assertions"]
         cases.append({
-            "id": str(tc.get("id", "")),
+            # Prefer the original LLM id so rerun results key the same way a live
+            # run does; fall back to the DB row id for legacy rows without one.
+            "id": str(tc.get("case_ref") or tc.get("id", "")),
             "title": tc.get("title") or "Untitled",
             "category": tc.get("category") or "positive",
             "request": tc.get("payload") or {},

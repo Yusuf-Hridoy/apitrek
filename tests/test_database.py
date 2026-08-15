@@ -48,7 +48,8 @@ def test_save_and_get_session(db):
     session = db.get_session(session_id)
     assert session["endpoint"] == "https://api.example.com/users/1"
     assert session["method"] == "POST"
-    assert session["headers"] == {"Authorization": "Bearer x"}
+    # Authorization is a credential — its value is redacted before storage.
+    assert session["headers"] == {"Authorization": db.REDACTED}
     assert session["body"] == {"name": "y"}
     assert session["sample_response"] == {"id": 1}
     assert session["mode"] == "functional"
@@ -84,6 +85,136 @@ def test_save_test_cases_and_results(db):
     assert len(session["execution_results"]) == 1
     assert session["execution_results"][0]["passed"] == 1
     assert session["execution_results"][0]["duration_ms"] == 42
+
+
+def test_sensitive_headers_are_redacted_on_save(db):
+    """Credential-bearing header values must never be persisted in plaintext."""
+    session_id = db.save_session(
+        endpoint="https://api.example.com/x",
+        method="GET",
+        headers={
+            "Authorization": "Bearer super-secret-token",
+            "X-API-Key": "abc123",
+            "Cookie": "session=deadbeef",
+            "Accept": "application/json",  # benign — kept as-is
+        },
+    )
+    stored = db.get_session(session_id)["headers"]
+    assert stored["Authorization"] == db.REDACTED
+    assert stored["X-API-Key"] == db.REDACTED
+    assert stored["Cookie"] == db.REDACTED
+    assert stored["Accept"] == "application/json"
+
+    # And the raw secret must not appear anywhere in the stored JSON.
+    with db._connect() as conn:
+        raw = conn.execute(
+            "SELECT headers_json FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()[0]
+    assert "super-secret-token" not in raw
+    assert "abc123" not in raw
+    assert "deadbeef" not in raw
+
+
+def test_redact_headers_handles_non_dict():
+    from core import database
+    assert database.redact_headers(None) is None
+    assert database.redact_headers("nope") == "nope"
+
+
+def test_sensitive_body_fields_are_redacted_on_save(db):
+    """Credential-like fields in request body and sample response are masked."""
+    session_id = db.save_session(
+        endpoint="https://api.example.com/login",
+        method="POST",
+        body={
+            "username": "alice",              # benign — kept
+            "password": "hunter2",            # secret
+            "profile": {"api_key": "AK-999", "displayName": "Alice"},  # nested
+            "accounts": [{"password": "pw-abc"}, "ok"],  # recurse into a benign list
+            "credentials": {"user": "u", "pass_hash": "ph"},  # sensitive key → whole value masked
+            "sortKey": "created_at",          # benign, must NOT match "key"
+        },
+        sample_response={"id": 1, "access_token": "resp-token-xyz"},
+    )
+    session = db.get_session(session_id)
+    body = session["body"]
+    assert body["username"] == "alice"
+    assert body["password"] == db.REDACTED
+    assert body["profile"]["api_key"] == db.REDACTED
+    assert body["profile"]["displayName"] == "Alice"
+    assert body["accounts"][0]["password"] == db.REDACTED
+    assert body["accounts"][1] == "ok"
+    assert body["credentials"] == db.REDACTED  # sensitive key masks the whole subtree
+    assert body["sortKey"] == "created_at"
+    assert session["sample_response"]["access_token"] == db.REDACTED
+    assert session["sample_response"]["id"] == 1
+
+    # No raw secret anywhere in the stored JSON.
+    with db._connect() as conn:
+        row = conn.execute(
+            "SELECT body_json, sample_response_json FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    raw = (row[0] or "") + (row[1] or "")
+    for secret in ("hunter2", "AK-999", "pw-abc", "ph", "resp-token-xyz"):
+        assert secret not in raw
+
+
+def test_redact_body_handles_scalars_and_lists():
+    from core import database
+    assert database.redact_body("plain") == "plain"
+    assert database.redact_body(42) == 42
+    assert database.redact_body(None) is None
+    assert database.redact_body([{"password": "x"}, "ok"]) == [{"password": database.REDACTED}, "ok"]
+
+
+def test_url_query_secrets_are_redacted_on_save(db):
+    """Secrets embedded in the endpoint URL query string are masked."""
+    session_id = db.save_session(
+        endpoint="https://api.example.com/v1/items?api_key=SECRET123&page=2",
+        method="GET",
+    )
+    stored = db.get_session(session_id)["endpoint"]
+    assert "SECRET123" not in stored
+    assert "api_key=" in stored and db.REDACTED in stored
+    assert "page=2" in stored              # benign param preserved
+    assert stored.startswith("https://api.example.com/v1/items")  # host/path intact
+
+
+def test_redact_url_leaves_benign_urls_untouched():
+    from core import database
+    plain = "https://api.example.com/items/1?page=2&sort=asc"
+    assert database.redact_url(plain) == plain            # no sensitive param → unchanged
+    assert database.redact_url("https://api.example.com/x") == "https://api.example.com/x"
+    assert database.redact_url(None) is None
+    # Common credential params get masked:
+    for u, secret in [
+        ("https://x.com/a?token=abc", "abc"),
+        ("https://x.com/a?key=zzz", "zzz"),
+        ("https://x.com/a?sig=qqq", "qqq"),
+    ]:
+        assert secret not in database.redact_url(u)
+
+
+def test_case_ref_round_trips(db):
+    """The original LLM case id is persisted and returned for history matching."""
+    session_id = db.save_session(endpoint="https://api.example.com/x", method="GET")
+    db.save_test_cases(session_id, [
+        {"category": "positive", "title": "Valid", "case_ref": "TC-POS-01"},
+        {"category": "assertion", "title": "Status 200"},  # no case_ref
+    ])
+    session = db.get_session(session_id)
+    cases = {c["title"]: c for c in session["test_cases"]}
+    assert cases["Valid"]["case_ref"] == "TC-POS-01"
+    assert cases["Status 200"]["case_ref"] is None
+
+
+def test_migrate_add_column_is_idempotent(db):
+    """Re-running init_db on an existing DB must not error or duplicate columns."""
+    db.init_db()  # second call — case_ref already exists
+    with db._connect() as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(test_cases)").fetchall()}
+    assert "case_ref" in cols
 
 
 def test_get_recent_sessions_order_and_aggregates(db):
