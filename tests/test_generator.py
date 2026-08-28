@@ -91,7 +91,7 @@ def test_generate_test_cases_mock_success():
     assert len(result["assertions"]) == 1
 
 
-def test_generate_test_cases_mock_malformed_json():
+def test_generate_test_cases_mock_malformed_json_falls_back():
     mock_client = MagicMock()
     mock_client.send_prompt.return_value = "not valid json {{{"
 
@@ -101,8 +101,10 @@ def test_generate_test_cases_mock_malformed_json():
         mistral_client=mock_client,
     )
 
-    assert "_error" in result
-    assert "Could not extract valid JSON" in result["_error"]
+    # Malformed LLM output degrades to the deterministic floor instead of hard-failing.
+    assert result.get("_degraded") is True
+    assert "_error" not in result
+    assert len(result["positive_test_cases"]) > 0
 
 
 def test_repair_truncated_json_unterminated_string():

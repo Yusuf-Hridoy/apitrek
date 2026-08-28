@@ -929,6 +929,20 @@ textarea {
     font-weight: 500;
 }
 
+.degraded-banner {
+    background: color-mix(in srgb, #d97706 12%, transparent);
+    color: #92400e;
+    border: 1px solid color-mix(in srgb, #d97706 35%, transparent);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+}
+
+.degraded-banner strong {
+    font-weight: 600;
+}
+
 .finding-detail-row td {
     background: var(--bg-inset);
     font-size: 0.8125rem;

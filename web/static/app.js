@@ -1363,6 +1363,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const PROVIDER_NAMES = { mistral: 'Mistral', groq: 'Groq', github: 'GitHub Models' };
     const providerBadge = document.getElementById('providerBadge');
+    const degradedBanner = document.getElementById('degradedBanner');
 
     function renderProviderBadge(provider) {
         if (!providerBadge) return;
@@ -1372,6 +1373,19 @@ document.addEventListener('DOMContentLoaded', () => {
             providerBadge.classList.remove('hidden');
         } else {
             providerBadge.classList.add('hidden');
+        }
+    }
+
+    function renderDegradedBanner(data) {
+        if (!degradedBanner) return;
+        if (data._degraded) {
+            degradedBanner.innerHTML =
+                '⚡ <strong>AI providers were unavailable</strong> — showing baseline test cases generated deterministically. ' +
+                'Reconnect an AI provider for richer, context-aware cases.';
+            degradedBanner.classList.remove('hidden');
+        } else {
+            degradedBanner.classList.add('hidden');
+            degradedBanner.innerHTML = '';
         }
     }
 
@@ -1395,6 +1409,7 @@ document.addEventListener('DOMContentLoaded', () => {
             lists.assertions.appendChild(legend);
         }
         renderProviderBadge(data._provider);
+        renderDegradedBanner(data);
         updateResultTabCounts({
             All: positive.length + negative.length + edge.length + assertions.length,
             Positive: positive.length,

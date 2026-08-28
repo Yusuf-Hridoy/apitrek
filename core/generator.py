@@ -10,6 +10,7 @@ from llm.mistral_client import MistralClient, MistralClientError, MistralTruncat
 from llm.ai_router import AIRouter, AllProvidersFailedError
 from llm.prompt_templates import SYSTEM_PROMPT, build_user_prompt
 from core.analyzer import build_analysis_metadata
+from core.deterministic_generator import generate_deterministic_cases
 
 
 EXPECTED_TOP_KEYS = {
@@ -373,11 +374,20 @@ def generate_test_cases(
     try:
         client = mistral_client or AIRouter()
     except Exception as e:
-        return _safe_error_response(f"Unexpected LLM error: {e}")
+        # No providers available at all — degrade to deterministic floor rather than hard-failing.
+        parsed = generate_deterministic_cases(endpoint, method, sample_response)
+        parsed["_degraded_reason"] = f"AI providers unavailable ({e}); generated baseline cases deterministically."
+        parsed["_degraded"] = True
+        # Skip the LLM path entirely and proceed through the shared finalization below.
+        client = None
 
-    parsed, error = _request_and_parse(client, user_prompt)
-    if error is not None:
-        return error
+    if client is not None:
+        parsed, error = _request_and_parse(client, user_prompt)
+        if error is not None:
+            # LLM path failed entirely — degrade to the deterministic floor.
+            parsed = generate_deterministic_cases(endpoint, method, sample_response)
+            parsed["_degraded_reason"] = f"AI providers unavailable ({error.get('_error', 'unknown')}); generated baseline cases deterministically."
+            parsed["_degraded"] = True
 
     # Validate structure — if keys are missing (usually a truncated response
     # whose tail sections got cut off), retry asking ONLY for the missing
