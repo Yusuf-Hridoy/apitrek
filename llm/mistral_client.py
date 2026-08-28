@@ -16,9 +16,10 @@ if _env_path.exists():
 
 
 DEFAULT_MODEL = "mistral-large-latest"
-MAX_RETRIES = 3
+MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 2
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
+LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 
 
 class MistralClientError(Exception):
@@ -87,7 +88,7 @@ class MistralClient:
                 response = self._session.post(
                     MISTRAL_API_URL,
                     json=payload,
-                    timeout=60,
+                    timeout=LLM_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
                 data = response.json()

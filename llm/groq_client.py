@@ -18,10 +18,13 @@ if _env_path.exists():
     load_dotenv(_env_path)
 
 
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
-MAX_RETRIES = 3
+# llama-3.3-70b-versatile was decommissioned by Groq on 2026-06-17.
+# Use Groq's current recommended OpenAI OSS model; override via GROQ_MODEL env var.
+DEFAULT_MODEL = "openai/gpt-oss-120b"
+MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 2
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 
 
 class GroqClientError(Exception):
@@ -90,7 +93,7 @@ class GroqClient:
                 response = self._session.post(
                     GROQ_API_URL,
                     json=payload,
-                    timeout=60,
+                    timeout=LLM_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
                 data = response.json()

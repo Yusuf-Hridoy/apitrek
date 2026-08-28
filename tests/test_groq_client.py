@@ -23,7 +23,7 @@ def test_groq_client_uses_env_key():
     with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}, clear=True):
         client = GroqClient()
         assert client.api_key == "test-key"
-        assert client.model == "llama-3.3-70b-versatile"
+        assert client.model == "openai/gpt-oss-120b"
 
 
 def test_groq_client_uses_custom_model():
@@ -71,7 +71,7 @@ def test_send_prompt_retries_then_fails(mock_session_class):
     with pytest.raises(GroqClientError, match="Failed to get response"):
         client.send_prompt("system", "user")
 
-    assert mock_session.post.call_count == 3
+    assert mock_session.post.call_count == 2
 
 
 @patch("llm.groq_client.time.sleep")
@@ -85,7 +85,6 @@ def test_send_prompt_exponential_backoff(mock_session_class, mock_sleep):
     }
     mock_session.post.side_effect = [
         requests.exceptions.ConnectionError("fail 1"),
-        requests.exceptions.Timeout("fail 2"),
         mock_response,
     ]
     mock_session_class.return_value = mock_session
@@ -93,9 +92,9 @@ def test_send_prompt_exponential_backoff(mock_session_class, mock_sleep):
     client = GroqClient(api_key="test-key")
     result = client.send_prompt("system", "user")
     assert result == "ok"
-    assert mock_session.post.call_count == 3
-    # Backoff delays: 2 * 1, then 2 * 2
-    assert [c.args[0] for c in mock_sleep.call_args_list] == [2, 4]
+    assert mock_session.post.call_count == 2
+    # Backoff delay: 2 * 1 on the first failure only
+    assert [c.args[0] for c in mock_sleep.call_args_list] == [2]
 
 
 @patch("llm.groq_client.requests.Session")

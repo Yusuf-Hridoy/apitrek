@@ -60,7 +60,7 @@ def test_send_prompt_retries_then_fails(mock_session_class):
     with pytest.raises(MistralClientError, match="Failed to get response"):
         client.send_prompt("system", "user")
 
-    assert mock_session.post.call_count == 3
+    assert mock_session.post.call_count == 2
 
 
 @patch("llm.mistral_client.requests.Session")
