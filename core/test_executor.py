@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from core.url_guard import safe_request, BlockedURLError
+
 REQUEST_TIMEOUT_SECONDS = 15
 RESPONSE_PREVIEW_LENGTH = 500
 
@@ -174,7 +176,7 @@ def execute_test_case(
         url, req_method, req_headers, req_body, mutations = _build_request(
             test_case, endpoint, method, headers, body
         )
-        response = requests.request(
+        response = safe_request(
             req_method,
             url,
             headers=req_headers,
@@ -215,6 +217,8 @@ def execute_test_case(
                 "detail": "Applied",
             })
 
+    except BlockedURLError as e:
+        error_message = f"Request blocked: {e}"
     except requests.exceptions.Timeout:
         error_message = f"Request timed out after {REQUEST_TIMEOUT_SECONDS}s"
     except requests.exceptions.RequestException as e:

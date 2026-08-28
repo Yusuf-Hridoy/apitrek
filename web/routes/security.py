@@ -72,13 +72,19 @@ async def list_owasp_categories() -> List[Dict[str, str]]:
 
 
 @router.post("/security/scan")
-def security_scan(payload: ScanRequest) -> Dict[str, Any]:
+@limiter.limit(LIMIT_SECURITY_SCAN)
+def security_scan(request: Request, payload: ScanRequest) -> Dict[str, Any]:
     """Generate and execute OWASP security tests against the endpoint."""
     if not payload.endpoint or not payload.endpoint.strip():
         raise HTTPException(status_code=422, detail="Endpoint is required.")
 
     endpoint = payload.endpoint.strip()
     method = payload.method.upper()
+
+    try:
+        validate_public_url(endpoint)
+    except BlockedURLError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     try:
         tests = generate_security_tests(

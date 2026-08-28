@@ -16,6 +16,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
+from core.url_guard import safe_request, BlockedURLError
+
 REQUEST_TIMEOUT_SECONDS = 15
 RESPONSE_PREVIEW_LENGTH = 500
 RATE_LIMIT_ATTEMPTS = 10
@@ -331,19 +333,21 @@ def execute_security_test(
     try:
         for _ in range(repeat):
             if payload.get("raw_body") is not None:
-                responses.append(requests.request(
+                responses.append(safe_request(
                     req_method, url,
                     headers={**req_headers, "Content-Type": "application/json"},
                     data=payload["raw_body"],
                     timeout=REQUEST_TIMEOUT_SECONDS,
                 ))
             else:
-                responses.append(requests.request(
+                responses.append(safe_request(
                     req_method, url,
                     headers=req_headers,
                     json=req_body if req_body is not None and req_method != "GET" else None,
                     timeout=REQUEST_TIMEOUT_SECONDS,
                 ))
+    except BlockedURLError as e:
+        error_message = f"Request blocked: {e}"
     except requests.exceptions.Timeout:
         error_message = f"Request timed out after {REQUEST_TIMEOUT_SECONDS}s"
     except requests.exceptions.RequestException as e:

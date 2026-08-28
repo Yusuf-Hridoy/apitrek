@@ -15,8 +15,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import FileResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from starlette.responses import FileResponse, JSONResponse
 
+from web.limiter import limiter
 from web.routes.generate import router as generate_router
 from web.routes.export import router as export_router
 from web.routes import cicd
@@ -39,6 +42,21 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": "Rate limit exceeded. Please slow down and try again shortly.",
+            "limit": str(exc.limit.limit) if getattr(exc, "limit", None) else None,
+        },
+        headers={"Retry-After": "60"},
+    )
+
 
 # The UI is served same-origin, so CORS is only for local cross-port dev tools.
 # Restrict to localhost (any port); a wildcard origin with credentials is invalid.

@@ -10,11 +10,12 @@ from typing import Any, Dict, Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from core.generator import generate_test_cases
 from core.live_fetcher import fetch_api_response, LiveFetchError
+from web.limiter import limiter, LIMIT_GENERATE
 from core.database import save_session, save_test_cases
 
 router = APIRouter(tags=["generate"])
@@ -89,7 +90,8 @@ class GenerateRequest(BaseModel):
 
 
 @router.post("/generate-tests")
-def generate_tests(payload: GenerateRequest) -> Dict[str, Any]:
+@limiter.limit(LIMIT_GENERATE)
+def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]:
     """
     Generate structured API test cases using the Phase 1 AI engine.
     """

@@ -31,7 +31,7 @@ def test_fetch_unsupported_method():
         fetch_api_response("https://api.example.com", method="CUSTOM")
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_success(mock_request):
     mock_response = MagicMock()
     mock_response.headers = {"Content-Type": "application/json"}
@@ -46,21 +46,21 @@ def test_fetch_success(mock_request):
     mock_request.assert_called_once()
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_timeout(mock_request):
     mock_request.side_effect = requests.exceptions.Timeout()
     with pytest.raises(LiveFetchError, match="timed out"):
         fetch_api_response("https://api.example.com/items")
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_connection_error(mock_request):
     mock_request.side_effect = requests.exceptions.ConnectionError("DNS failed")
     with pytest.raises(LiveFetchError, match="Could not connect"):
         fetch_api_response("https://api.example.com/items")
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_html_response(mock_request):
     mock_response = MagicMock()
     mock_response.headers = {"Content-Type": "text/html"}
@@ -73,7 +73,7 @@ def test_fetch_html_response(mock_request):
         fetch_api_response("https://api.example.com/items")
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_empty_response(mock_request):
     mock_response = MagicMock()
     mock_response.headers = {"Content-Type": "application/json"}
@@ -86,7 +86,7 @@ def test_fetch_empty_response(mock_request):
         fetch_api_response("https://api.example.com/items")
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_non_json_response(mock_request):
     mock_response = MagicMock()
     mock_response.headers = {"Content-Type": "text/plain"}
@@ -100,7 +100,7 @@ def test_fetch_non_json_response(mock_request):
         fetch_api_response("https://api.example.com/items")
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_500_error(mock_request):
     mock_response = MagicMock()
     mock_response.headers = {"Content-Type": "application/json"}
@@ -113,7 +113,7 @@ def test_fetch_500_error(mock_request):
         fetch_api_response("https://api.example.com/items")
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_401_error(mock_request):
     mock_response = MagicMock()
     mock_response.headers = {"Content-Type": "application/json"}
@@ -126,7 +126,7 @@ def test_fetch_401_error(mock_request):
         fetch_api_response("https://api.example.com/items")
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_post_with_body(mock_request):
     mock_response = MagicMock()
     mock_response.headers = {"Content-Type": "application/json"}
@@ -144,14 +144,15 @@ def test_fetch_post_with_body(mock_request):
     )
 
     assert result == {"success": True}
-    call_kwargs = mock_request.call_args.kwargs
-    assert call_kwargs["method"] == "POST"
-    assert call_kwargs["json"] == {"name": "test"}
-    assert call_kwargs["headers"]["Authorization"] == "Bearer token"
-    assert call_kwargs["headers"]["Content-Type"] == "application/json"
+    kwargs = mock_request.call_args.kwargs
+    assert kwargs["method"] == "POST"
+    assert kwargs["url"] == "https://api.example.com/items"
+    assert kwargs["json"] == {"name": "test"}
+    assert kwargs["headers"]["Authorization"] == "Bearer token"
+    assert kwargs["headers"]["Content-Type"] == "application/json"
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_response_too_large(mock_request):
     mock_response = MagicMock()
     mock_response.headers = {"Content-Length": str(2 * 1024 * 1024)}
@@ -163,7 +164,7 @@ def test_fetch_response_too_large(mock_request):
         fetch_api_response("https://api.example.com/items")
 
 
-@patch("core.live_fetcher.requests.request")
+@patch("core.live_fetcher.safe_request")
 def test_fetch_list_json(mock_request):
     mock_response = MagicMock()
     mock_response.headers = {"Content-Type": "application/json"}

@@ -97,7 +97,7 @@ def test_all_tests_have_required_shape():
 
 # --- execute_security_test ---
 
-@patch("core.security_scanner.requests.request")
+@patch("core.security_scanner.safe_request")
 def test_vulnerable_when_protected_endpoint_returns_200(mock_request):
     mock_request.return_value = _resp(status=200, text='{"data": "secret"}')
     test = {
@@ -115,7 +115,7 @@ def test_vulnerable_when_protected_endpoint_returns_200(mock_request):
     assert "Authorization" not in kwargs["headers"]
 
 
-@patch("core.security_scanner.requests.request")
+@patch("core.security_scanner.safe_request")
 def test_secure_when_unauthorized_returned(mock_request):
     mock_request.return_value = _resp(status=401)
     test = {
@@ -129,7 +129,7 @@ def test_secure_when_unauthorized_returned(mock_request):
     assert result["vulnerable"] is False
 
 
-@patch("core.security_scanner.requests.request")
+@patch("core.security_scanner.safe_request")
 def test_error_on_server_error(mock_request):
     mock_request.return_value = _resp(status=500)
     test = {
@@ -142,7 +142,7 @@ def test_error_on_server_error(mock_request):
     assert result["vulnerable"] is False
 
 
-@patch("core.security_scanner.requests.request")
+@patch("core.security_scanner.safe_request")
 def test_network_failure_returns_error_finding(mock_request):
     mock_request.side_effect = requests.exceptions.ConnectionError("down")
     test = {"id": "T", "owasp_category": "API8:2023 - Security Misconfiguration",
@@ -154,7 +154,7 @@ def test_network_failure_returns_error_finding(mock_request):
     assert result["actual_status"] == 0
 
 
-@patch("core.security_scanner.requests.request")
+@patch("core.security_scanner.safe_request")
 def test_rate_limit_secure_when_any_429(mock_request):
     mock_request.side_effect = [_resp(status=200) for _ in range(9)] + [_resp(status=429)]
     test = {"id": "SEC-API6-01", "owasp_category": "API6:2023 - ...", "severity": "Medium",
@@ -164,7 +164,7 @@ def test_rate_limit_secure_when_any_429(mock_request):
     assert mock_request.call_count == 10
 
 
-@patch("core.security_scanner.requests.request")
+@patch("core.security_scanner.safe_request")
 def test_rate_limit_vulnerable_when_never_throttled(mock_request):
     mock_request.return_value = _resp(status=200)
     test = {"id": "SEC-API6-01", "owasp_category": "API6:2023 - ...", "severity": "Medium",
@@ -173,7 +173,7 @@ def test_rate_limit_vulnerable_when_never_throttled(mock_request):
     assert result["finding"] == "Vulnerable"
 
 
-@patch("core.security_scanner.requests.request")
+@patch("core.security_scanner.safe_request")
 def test_security_headers_check(mock_request):
     mock_request.return_value = _resp(status=200, headers={"x-frame-options": "DENY"})
     test = {"id": "SEC-API8-02", "owasp_category": "API8:2023 - ...", "severity": "Medium",
@@ -192,7 +192,7 @@ def test_security_headers_check(mock_request):
     assert result["finding"] == "Secure"
 
 
-@patch("core.security_scanner.requests.request")
+@patch("core.security_scanner.safe_request")
 def test_error_disclosure_check(mock_request):
     mock_request.return_value = _resp(status=400, text="Traceback (most recent call last): ...")
     test = {"id": "SEC-API8-01", "owasp_category": "API8:2023 - ...", "severity": "Medium",
@@ -205,7 +205,7 @@ def test_error_disclosure_check(mock_request):
     assert kwargs["data"] == "{bad,,"
 
 
-@patch("core.security_scanner.requests.request")
+@patch("core.security_scanner.safe_request")
 def test_ssrf_query_param_applied(mock_request):
     mock_request.return_value = _resp(status=400)
     test = {"id": "SEC-API7-01", "owasp_category": "API7:2023 - ...", "severity": "High",

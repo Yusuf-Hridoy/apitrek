@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 import requests
 
+from core.url_guard import safe_request, BlockedURLError
+
 
 class LiveFetchError(Exception):
     """Raised when live API fetching fails."""
@@ -63,18 +65,19 @@ def fetch_api_response(
         request_headers.setdefault("Content-Type", "application/json")
 
     try:
-        req_kwargs: Dict[str, Any] = {
-            "url": endpoint,
-            "method": method,
-            "headers": request_headers,
-            "timeout": REQUEST_TIMEOUT_SECONDS,
-            "allow_redirects": True,
-        }
-
+        json_body = None
         if method in ("POST", "PUT", "PATCH") and request_body is not None:
-            req_kwargs["json"] = request_body
+            json_body = request_body
 
-        response = requests.request(**req_kwargs)
+        response = safe_request(
+            method=method,
+            url=endpoint,
+            headers=request_headers,
+            json=json_body,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except BlockedURLError as e:
+        raise LiveFetchError(str(e))
     except requests.exceptions.Timeout:
         raise LiveFetchError(
             f"Request timed out after {REQUEST_TIMEOUT_SECONDS} seconds."

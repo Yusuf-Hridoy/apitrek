@@ -24,7 +24,7 @@ def _mock_response(status=200, payload=None, text=None):
     return response
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_positive_case_passes_on_expected_status(mock_request):
     mock_request.return_value = _mock_response(status=200, payload={"id": 1, "title": "x"})
     result = execute_test_case(
@@ -40,7 +40,7 @@ def test_positive_case_passes_on_expected_status(mock_request):
     assert isinstance(result["duration_ms"], int)
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_status_mismatch_fails(mock_request):
     mock_request.return_value = _mock_response(status=404)
     result = execute_test_case(
@@ -53,7 +53,7 @@ def test_status_mismatch_fails(mock_request):
     assert status_assertions and status_assertions[0]["passed"] is False
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_network_error_returns_structured_result(mock_request):
     mock_request.side_effect = requests.exceptions.ConnectionError("boom")
     result = execute_test_case({"id": "TC-1", "title": "t"}, ENDPOINT, "GET")
@@ -62,7 +62,7 @@ def test_network_error_returns_structured_result(mock_request):
     assert "boom" in result["error_message"]
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_timeout_returns_structured_result(mock_request):
     mock_request.side_effect = requests.exceptions.Timeout()
     result = execute_test_case({"id": "TC-1", "title": "t"}, ENDPOINT, "GET")
@@ -70,7 +70,7 @@ def test_timeout_returns_structured_result(mock_request):
     assert "timed out" in result["error_message"]
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_negative_case_mutates_request(mock_request):
     mock_request.return_value = _mock_response(status=400)
     execute_test_case(
@@ -88,7 +88,7 @@ def test_negative_case_mutates_request(mock_request):
     assert kwargs["json"] == {"price": 10}
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_edge_case_applies_boundary_values(mock_request):
     mock_request.return_value = _mock_response(status=200)
     execute_test_case(
@@ -103,7 +103,7 @@ def test_edge_case_applies_boundary_values(mock_request):
     assert kwargs["json"]["note"] is None
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_validation_rules_checked(mock_request):
     mock_request.return_value = _mock_response(status=200, payload={"id": 1, "price": 9.99})
     result = execute_test_case(
@@ -124,7 +124,7 @@ def test_validation_rules_checked(mock_request):
     assert result["passed"] is False
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_assertion_category_runs_rule(mock_request):
     mock_request.return_value = _mock_response(status=200, payload=[{"id": 1}])
     result = execute_test_case(
@@ -136,14 +136,14 @@ def test_assertion_category_runs_rule(mock_request):
     assert any("status code" in a["assertion"].lower() for a in result["assertion_results"])
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_response_preview_truncated(mock_request):
     mock_request.return_value = _mock_response(status=200, text="x" * 1000)
     result = execute_test_case({"id": "TC-1", "title": "t"}, ENDPOINT, "GET")
     assert len(result["actual_response_preview"]) == 500
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_uses_15s_timeout(mock_request):
     mock_request.return_value = _mock_response()
     execute_test_case({"id": "TC-1", "title": "t"}, ENDPOINT, "GET")
@@ -151,7 +151,7 @@ def test_uses_15s_timeout(mock_request):
     assert kwargs["timeout"] == 15
 
 
-@patch("core.test_executor.requests.request")
+@patch("core.test_executor.safe_request")
 def test_execute_test_suite_runs_all_sequentially(mock_request):
     mock_request.return_value = _mock_response(status=200)
     cases = [
