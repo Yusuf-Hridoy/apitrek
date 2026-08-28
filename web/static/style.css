@@ -239,6 +239,29 @@ textarea {
     background: var(--bg-inset);
 }
 
+.label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.sample-btn {
+    font-size: 13px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--accent-blue);
+    background: transparent;
+    color: var(--accent-blue);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+
+.sample-btn:hover {
+    background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+}
+
 /* Spinner */
 .spinner {
     display: inline-block;
@@ -874,6 +897,37 @@ textarea {
 .finding-vulnerable { border-left: 4px solid #dc2626; }
 .finding-secure { border-left: 4px solid #22c55e; }
 .finding-review { border-left: 4px solid #d97706; }
+
+.ground-badge {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+}
+
+.ground-verified {
+    color: #0f6e56;
+    background: rgba(29, 158, 117, 0.14);
+}
+
+.ground-unverified {
+    color: #854f0b;
+    background: rgba(217, 119, 6, 0.16);
+}
+
+.ground-legend {
+    font-size: 12px;
+    color: var(--text-secondary, #666);
+    margin: 8px 2px 0;
+}
+
+.ground-legend .ground-verified,
+.ground-legend .ground-unverified {
+    padding: 0;
+    background: none;
+    font-weight: 500;
+}
 
 .finding-detail-row td {
     background: var(--bg-inset);

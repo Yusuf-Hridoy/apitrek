@@ -73,7 +73,10 @@
                         <section class="card input-card">
                             <form id="testForm" class="form">
                                 <div class="form-group">
-                                    <label for="endpoint">API Endpoint <span class="required">*</span></label>
+                                    <div class="label-row">
+                                        <label for="endpoint">API Endpoint <span class="required">*</span></label>
+                                        <button type="button" id="sampleBtn" class="sample-btn">▶ Try a sample API</button>
+                                    </div>
                                     <input
                                         type="url"
                                         id="endpoint"
@@ -81,6 +84,7 @@
                                         placeholder="https://api.example.com/items/1"
                                         required
                                     >
+                                    <span class="hint-text" id="sampleHint">One click fills a safe public endpoint and runs the full pipeline — no typing needed.</span>
                                     <span class="field-error hidden" id="endpointError"></span>
                                 </div>
 

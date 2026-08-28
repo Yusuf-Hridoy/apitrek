@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const exportBtn = document.getElementById('exportBtn');
     const autoFetchCheckbox = document.getElementById('autoFetch');
     const sampleResponseGroup = document.getElementById('sampleResponseGroup');
+    const sampleBtn = document.getElementById('sampleBtn');
 
     const lists = {
         positive: document.getElementById('positiveList'),
@@ -192,6 +193,26 @@ document.addEventListener('DOMContentLoaded', () => {
             setLoading(false);
         }
     });
+
+    if (sampleBtn) {
+        sampleBtn.addEventListener('click', () => {
+            document.getElementById('endpoint').value = 'https://fakestoreapi.com/products/1';
+            document.getElementById('method').value = 'GET';
+            if (autoFetchCheckbox) autoFetchCheckbox.checked = true;
+            if (sampleResponseGroup) sampleResponseGroup.classList.remove('hidden');
+            // Clear any stale advanced-field values so the sample runs clean
+            ['headers', 'requestBody', 'sampleResponse'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            // Reuse the existing submit pipeline — do not duplicate fetch/render.
+            if (form.requestSubmit) {
+                form.requestSubmit();
+            } else {
+                form.dispatchEvent(new Event('submit', { cancelable: true }));
+            }
+        });
+    }
 
     copyBtn.addEventListener('click', () => {
         if (!lastResult) return;
@@ -1131,6 +1152,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     category: tc.description || 'general',
                     rule: tc.title || '',
                     severity: tc.severity || 'medium',
+                    grounded: tc.grounded === true,
                 });
                 return;
             }
@@ -1366,6 +1388,12 @@ document.addEventListener('DOMContentLoaded', () => {
         renderCaseList(lists.negative, negative, 'negative');
         renderCaseList(lists.edge, edge, 'edge');
         renderAssertions(lists.assertions, assertions);
+        if (assertions.length && lists.assertions) {
+            const legend = document.createElement('p');
+            legend.className = 'ground-legend';
+            legend.innerHTML = '<span class="ground-verified">✓ verified</span> = checked against the real fetched response &middot; <span class="ground-unverified">⚠ unverified</span> = model-generated, confirm before trusting';
+            lists.assertions.appendChild(legend);
+        }
         renderProviderBadge(data._provider);
         updateResultTabCounts({
             All: positive.length + negative.length + edge.length + assertions.length,
@@ -1479,9 +1507,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const severityTag = `<span class="tag severity-${severity}">${escapeHtml(a.severity || 'medium')}</span>`;
             const categoryTag = `<span class="tag">${escapeHtml(a.category || 'general')}</span>`;
 
+            const grounded = a.grounded === true;
+            const groundBadge = grounded
+                ? '<span class="ground-badge ground-verified" title="Checked against the real fetched response">✓ verified</span>'
+                : '<span class="ground-badge ground-unverified" title="Model-generated; no ground truth. Confirm before trusting.">⚠ unverified</span>';
+
             el.innerHTML = `
                 <div class="case-row">
                     <span class="status-badge pending">Pending</span>
+                    ${groundBadge}
                     <span class="case-title">${escapeHtml(a.rule || 'Untitled assertion')}</span>
                     <span class="case-row-tags">${categoryTag}${severityTag}</span>
                     <button type="button" class="btn-run">Run</button>
