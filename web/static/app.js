@@ -196,7 +196,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (sampleBtn) {
         sampleBtn.addEventListener('click', () => {
-            document.getElementById('endpoint').value = 'https://fakestoreapi.com/products/1';
+            document.getElementById('endpoint').value = 'https://jsonplaceholder.typicode.com/posts/1';
             document.getElementById('method').value = 'GET';
             if (autoFetchCheckbox) autoFetchCheckbox.checked = true;
             if (sampleResponseGroup) sampleResponseGroup.classList.remove('hidden');

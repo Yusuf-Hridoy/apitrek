@@ -33,6 +33,11 @@ def _normalize_ip(ip_str: str) -> ipaddress._BaseAddress:
     # Unwrap IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) so it can't bypass checks.
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
+    # Unwrap DNS64 / NAT64 Well-Known Prefix (64:ff9b::/96). These addresses
+    # embed a real public IPv4 address and are returned by DNS64 resolvers on
+    # IPv6-only networks; blocking them falsely blocks legitimate IPv4 sites.
+    elif isinstance(ip, ipaddress.IPv6Address) and ip in ipaddress.ip_network("64:ff9b::/96"):
+        ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     return ip
 
 

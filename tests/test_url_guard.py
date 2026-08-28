@@ -40,6 +40,19 @@ def test_blocks_ipv4_mapped_ipv6_loopback():
             validate_public_url("http://localhost/")
 
 
+def test_allows_dns64_well_known_prefix():
+    # 64:ff9b::/96 embeds 34.202.68.214 (public). It must not be blocked as "reserved".
+    with _patch_resolve(["64:ff9b::22ca:44d6"]):
+        validate_public_url("http://httpbin.org/get")  # no exception
+
+
+def test_blocks_dns64_embedded_loopback():
+    # 64:ff9b::7f00:0001 embeds 127.0.0.1 — still loopback, must be blocked.
+    with _patch_resolve(["64:ff9b::7f00:1"]):
+        with pytest.raises(BlockedURLError, match="non-public address"):
+            validate_public_url("http://httpbin.org/get")
+
+
 def test_blocks_metadata_endpoint():
     with pytest.raises(BlockedURLError, match="non-public address"):
         validate_public_url("http://169.254.169.254/latest/meta-data/")
