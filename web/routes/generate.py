@@ -52,6 +52,7 @@ def _cases_for_db(result: Dict[str, Any]) -> list:
             "assertions": [assertion.get("rule")] if assertion.get("rule") else [],
             "payload": None,
             "severity": assertion.get("severity"),
+            "grounded": assertion.get("grounded", False),
         })
     return rows
 

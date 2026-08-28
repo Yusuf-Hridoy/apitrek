@@ -258,7 +258,34 @@ def test_generate_test_cases_retry_merges_only_missing_sections():
     assert result["negative_test_cases"] == [{"id": "TC-NEG-01"}]
     # Missing sections merged from the retry
     assert result["edge_cases"] == [{"id": "TC-EDGE-01"}]
-    assert result["assertions"] == [{"category": "status_code", "rule": "200 OK"}]
+    assert result["assertions"] == [{"category": "status_code", "rule": "200 OK", "grounded": False}]
+
+
+def test_generate_test_cases_grounds_assertions_against_sample_response():
+    mock_client = MagicMock()
+    mock_response = json.dumps({
+        "positive_test_cases": [{"id": "TC-POS-01", "title": "Valid request"}],
+        "negative_test_cases": [],
+        "edge_cases": [],
+        "assertions": [
+            {"category": "schema", "rule": 'body has field "price"', "severity": "high"},
+            {"category": "schema", "rule": 'body has field "currency"', "severity": "high"},
+            {"category": "performance", "rule": "Response time is under 2000ms", "severity": "medium"},
+        ],
+    })
+    mock_client.send_prompt.return_value = mock_response
+
+    result = generate_test_cases(
+        endpoint="https://api.example.com/products/1",
+        method="GET",
+        sample_response={"id": 1, "title": "x", "price": 9.99},
+        mistral_client=mock_client,
+    )
+
+    assert "grounded" in result["assertions"][0]
+    assert result["assertions"][0]["grounded"] is True   # price exists
+    assert result["assertions"][1]["grounded"] is False  # currency does not exist
+    assert result["assertions"][2]["grounded"] is False  # timing cannot be grounded
 
 
 if __name__ == "__main__":

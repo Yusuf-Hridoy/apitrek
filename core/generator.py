@@ -182,6 +182,87 @@ def _derive_default_assertions(parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
     return unique[:8]
 
 
+_FIELD_QUOTED = re.compile(r'[\"\']([A-Za-z_][\w.]*)[\"\']')
+_FIELD_DOTTED = re.compile(r'\b([A-Za-z_]\w*(?:\.\w+)+)\b')
+
+_GROUNDING_STOPWORDS = {
+    "response", "body", "field", "is", "a", "the", "of", "number", "string",
+    "array", "object", "must", "should", "be", "not", "null", "present",
+    "returns", "contains", "has", "and", "or", "valid", "json", "within",
+}
+
+
+def _resolve_path(obj: Any, path: str) -> bool:
+    """True if a dotted path resolves in obj. For lists, check the first element."""
+    cur = obj
+    for part in path.split("."):
+        if isinstance(cur, dict):
+            if part not in cur:
+                return False
+            cur = cur[part]
+        elif isinstance(cur, list):
+            if not cur or not isinstance(cur[0], dict) or part not in cur[0]:
+                return False
+            cur = cur[0][part]
+        else:
+            return False
+    return True
+
+
+def _field_present(response: Any, field: str) -> bool:
+    if response is None:
+        return False
+    try:
+        if "." in field:
+            return _resolve_path(response, field)
+        if isinstance(response, dict):
+            return field in response
+        if isinstance(response, list) and response and isinstance(response[0], dict):
+            return field in response[0]
+    except Exception:
+        return False
+    return False
+
+
+def _is_grounded(rule: str, response: Any) -> bool:
+    """Deterministic grounding: is this assertion observably true of `response`?"""
+    if response is None or not isinstance(rule, str):
+        return False
+    text = rule.strip()
+    low = text.lower()
+
+    if "valid json" in low:
+        return True
+    if "response time" in low or "status code" in low or "status ==" in low:
+        return False
+
+    m = _FIELD_QUOTED.search(text)
+    if m:
+        return _field_present(response, m.group(1))
+    m = _FIELD_DOTTED.search(text)
+    if m:
+        return _field_present(response, m.group(1))
+
+    for tok in re.findall(r"\b[A-Za-z_]\w*\b", text):
+        if tok.lower() in _GROUNDING_STOPWORDS:
+            continue
+        if _field_present(response, tok):
+            return True
+    return False
+
+
+def annotate_grounding(assertions: List[Dict[str, Any]], response: Any) -> List[Dict[str, Any]]:
+    """Add 'grounded' (bool) to each assertion based on the fetched response."""
+    for a in assertions or []:
+        if not isinstance(a, dict):
+            continue
+        try:
+            a["grounded"] = _is_grounded(a.get("rule", ""), response)
+        except Exception:
+            a["grounded"] = False
+    return assertions
+
+
 def _safe_error_response(error_message: str) -> Dict[str, Any]:
     """Return a structured error JSON that conforms to the expected schema."""
     return {
@@ -342,6 +423,12 @@ def generate_test_cases(
     for key in EXPECTED_TOP_KEYS:
         if not isinstance(parsed.get(key), list):
             parsed[key] = []
+
+    # Grounding: mark which assertions are backed by the real fetched response.
+    try:
+        parsed["assertions"] = annotate_grounding(parsed.get("assertions") or [], sample_response)
+    except Exception:
+        pass  # never break generation over grounding
 
     # Record which AI provider produced the result (for UI badge)
     provider = getattr(client, "last_provider", None)
