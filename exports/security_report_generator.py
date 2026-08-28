@@ -47,6 +47,7 @@ def generate_markdown_report(scan_results: Dict[str, Any], endpoint: str) -> str
         "",
         f"- Tests executed: {summary.get('total_tests', len(findings))}",
         f"- Vulnerable findings: {summary.get('vulnerable_count', len(_vulnerable_findings(scan_results)))}",
+        f"- Needs review (manual): {summary.get('needs_review_count', 0)}",
         f"- Critical: {summary.get('critical', 0)} | High: {summary.get('high', 0)} "
         f"| Medium: {summary.get('medium', 0)} | Low: {summary.get('low', 0)}",
         f"- Scan duration: {scan_results.get('scan_duration_ms', 0)} ms",
@@ -74,6 +75,15 @@ def generate_markdown_report(scan_results: Dict[str, Any], endpoint: str) -> str
             f"- [ ] **[{f.get('severity', '')}] {f.get('title', '')}** "
             f"({f.get('owasp_category', '')}) — {f.get('remediation', '')}"
         )
+
+    needs = [f for f in findings if f.get("finding") == "Needs Review"]
+    if needs:
+        lines += ["", "## Needs manual review", ""]
+        for f in needs:
+            lines.append(
+                f"- [ ] **[{f.get('severity', '')}] {f.get('title', '')}** — "
+                f"{f.get('finding_reason', '')}"
+            )
 
     lines += [
         "",
@@ -117,6 +127,7 @@ def generate_html_report(scan_results: Dict[str, Any], endpoint: str) -> str:
             f"<td>{html.escape(str(f.get('actual_status', '')))}</td>"
             f"</tr>"
             f"<tr class='detail'><td colspan='5'>"
+            f"<strong>Reason:</strong> {html.escape(str(f.get('finding_reason', '')))}<br>"
             f"<strong>Remediation:</strong> {html.escape(str(f.get('remediation', '')))}<br>"
             f"<strong>Payload:</strong> <code>{html.escape(str(f.get('payload_used', {})))}</code>"
             f"</td></tr>"
@@ -161,6 +172,7 @@ def generate_html_report(scan_results: Dict[str, Any], endpoint: str) -> str:
   <div class="gauge"><div class="gauge-fill"></div></div>
   <p>Tests executed: {summary.get('total_tests', len(findings))} &middot;
      Vulnerable: {summary.get('vulnerable_count', len(_vulnerable_findings(scan_results)))} &middot;
+     Needs review: {summary.get('needs_review_count', 0)} &middot;
      Critical: {summary.get('critical', 0)} &middot; High: {summary.get('high', 0)} &middot;
      Medium: {summary.get('medium', 0)} &middot; Low: {summary.get('low', 0)} &middot;
      Duration: {scan_results.get('scan_duration_ms', 0)} ms</p>

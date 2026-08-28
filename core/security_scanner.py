@@ -20,7 +20,7 @@ from core.url_guard import safe_request, BlockedURLError
 
 REQUEST_TIMEOUT_SECONDS = 15
 RESPONSE_PREVIEW_LENGTH = 500
-RATE_LIMIT_ATTEMPTS = 10
+RATE_LIMIT_ATTEMPTS = 15
 
 OWASP_CATEGORIES = {
     "API1:2023": "Broken Object Level Authorization",
@@ -43,6 +43,26 @@ OWASP_DESCRIPTIONS = {
 }
 
 SEVERITY_WEIGHTS = {"Critical": 25, "High": 15, "Medium": 8, "Low": 3}
+
+# Finding verdicts. "Needs Review" = the probe ran but cannot be auto-judged
+# (e.g. SSRF without an out-of-band listener). It is NOT counted as a
+# vulnerability in the risk score, but it is surfaced to the user so they can
+# verify manually instead of being given a false all-clear.
+FINDING_VULNERABLE = "Vulnerable"
+FINDING_SECURE = "Secure"
+FINDING_NEEDS_REVIEW = "Needs Review"
+FINDING_ERROR = "Error"
+
+_SSRF_SIGNALS = (
+    "connection refused",
+    "econnrefused",
+    "failed to connect",
+    "no route to host",
+    "connection timed out",
+    "could not resolve",
+    "127.0.0.1",
+    "localhost",
+)
 
 ERROR_DISCLOSURE_PATTERNS = (
     "traceback",
@@ -186,11 +206,13 @@ def generate_security_tests(
         "SEC-API5-01", "API5:2023", "High",
         "Probe administrative endpoint with user credentials",
         "Request an /admin variant of the endpoint with the current (non-admin) "
-        "credentials. Privileged functions must be denied.",
+        "credentials. A 2xx is a concrete positive; 401/403 is a concrete "
+        "denial; a 404 only means the guessed path likely does not exist.",
         {"modified_endpoint": _admin_variant(endpoint)},
         403,
         "Enforce role-based access control server-side for every administrative "
-        "function; deny by default.",
+        "function; deny by default. For a stronger test, supply a real "
+        "privileged endpoint path.",
     ))
     if method == "GET":
         tests.append(_make_test(
@@ -208,8 +230,9 @@ def generate_security_tests(
     tests.append(_make_test(
         "SEC-API6-01", "API6:2023", "Medium",
         "Rapid sequential requests (rate limiting)",
-        f"Send {RATE_LIMIT_ATTEMPTS} requests in quick succession. The API should "
-        "throttle abusive bursts with 429.",
+        f"Send {RATE_LIMIT_ATTEMPTS} requests in quick succession. A 429 confirms "
+        "throttling; absence of 429 only means the probe burst did not exceed "
+        "the limit and must be verified manually.",
         {"repeat": RATE_LIMIT_ATTEMPTS},
         429,
         "Apply rate limiting per API key/IP and return 429 with Retry-After "
@@ -232,12 +255,14 @@ def generate_security_tests(
         tests.append(_make_test(
             f"SEC-API7-{i:02d}", "API7:2023", "High",
             f"SSRF probe via '{param['name']}' parameter (localhost)",
-            f"Set the '{param['name']}' parameter to a loopback address. If the API "
-            f"fetches it server-side, internal services could be reached.",
+            f"Set the '{param['name']}' parameter to a loopback address. Automated "
+            f"detection is best-effort; confirm real SSRF with an out-of-band "
+            f"listener (e.g. interactsh or Burp Collaborator).",
             {"set_param": {**param, "value": "http://127.0.0.1/"}},
             400,
             "Validate and allow-list outbound URLs; block loopback, link-local, "
-            "and private IP ranges; fetch remote content through an egress proxy.",
+            "and private IP ranges; fetch remote content through an egress proxy. "
+            "Confirm serious findings with an out-of-band callback service.",
         ))
 
     # --- API8:2023 Security Misconfiguration ---
@@ -283,6 +308,25 @@ def _apply_query_param(url: str, name: str, value: str) -> str:
     query = dict(parse_qsl(parts.query))
     query[name] = value
     return urlunparse(parts._replace(query=urlencode(query)))
+
+
+def _baseline_response(
+    endpoint: str,
+    method: str,
+    headers: Optional[Dict[str, Any]],
+    body: Optional[Dict[str, Any]],
+) -> Optional[requests.Response]:
+    """Fetch the endpoint WITHOUT any injected param, for differential compare."""
+    try:
+        return safe_request(
+            (method or "GET").upper(),
+            endpoint,
+            headers=headers or {},
+            json=body if body is not None and (method or "GET").upper() != "GET" else None,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return None
 
 
 def execute_security_test(
@@ -363,7 +407,8 @@ def execute_security_test(
             "vulnerable": False,
             "actual_status": 0,
             "actual_response_preview": "",
-            "finding": "Error",
+            "finding": FINDING_ERROR,
+            "finding_reason": "",
             "remediation": test.get("remediation", ""),
             "payload_used": payload,
             "duration_ms": duration_ms,
@@ -374,44 +419,113 @@ def execute_security_test(
     actual_status = last.status_code
     preview = last.text[:RESPONSE_PREVIEW_LENGTH]
 
-    if actual_status >= 500:
-        finding = "Error"
+    finding = FINDING_SECURE
+    finding_reason = ""
+    test_id = str(test.get("id", ""))
+
+    if test_id.startswith(("SEC-API7", "SEC-API10")):
+        body_l = last.text.lower()
+        baseline = _baseline_response(endpoint, method, headers, body)
+        base_l = baseline.text.lower() if baseline is not None else ""
+        new_signals = [s for s in _SSRF_SIGNALS if s in body_l and s not in base_l]
+        if new_signals:
+            finding = FINDING_VULNERABLE
+            finding_reason = (
+                f"Response shows internal-fetch evidence: {', '.join(new_signals[:3])}."
+            )
+        elif (
+            actual_status in (400, 422)
+            and baseline is not None
+            and baseline.status_code < 400
+        ):
+            finding = FINDING_SECURE
+            finding_reason = "Target rejected the injected URL parameter."
+        elif actual_status >= 500:
+            finding = FINDING_NEEDS_REVIEW
+            finding_reason = (
+                "Server error on SSRF probe; may indicate an attempted internal fetch. "
+                "Verify out-of-band."
+            )
+        else:
+            finding = FINDING_NEEDS_REVIEW
+            finding_reason = (
+                "SSRF probe sent; no automated signal. Confirm with an out-of-band "
+                "listener (e.g. interactsh/Burp Collaborator)."
+            )
+    elif test_id == "SEC-API5-01":
+        if 200 <= actual_status < 300:
+            finding = FINDING_VULNERABLE
+            finding_reason = "Reached an /admin path with non-admin credentials."
+        elif actual_status in (401, 403):
+            finding = FINDING_SECURE
+            finding_reason = "Admin path access was denied."
+        else:
+            finding = FINDING_NEEDS_REVIEW
+            finding_reason = (
+                f"Guessed /admin path returned {actual_status}; the path likely does "
+                "not exist. Supply a real privileged endpoint to test BFLA properly."
+            )
+    elif test_id == "SEC-API6-01":
+        throttled = any(r.status_code == 429 for r in responses)
+        if throttled:
+            finding = FINDING_SECURE
+            finding_reason = f"Throttling observed (429) within {len(responses)} requests."
+        else:
+            finding = FINDING_NEEDS_REVIEW
+            finding_reason = (
+                f"No 429 in {len(responses)} rapid requests. This does NOT confirm "
+                "missing rate limiting — the limit may exceed the probe burst."
+            )
+    elif actual_status >= 500:
+        finding = FINDING_ERROR
+        finding_reason = "The API returned a server error."
     elif check == "security_headers":
         present = {k.lower() for k in last.headers.keys()}
         missing = [h for h in RECOMMENDED_SECURITY_HEADERS if h not in present]
-        finding = "Vulnerable" if missing else "Secure"
+        finding = FINDING_VULNERABLE if missing else FINDING_SECURE
+        finding_reason = (
+            f"Missing headers: {', '.join(missing)}" if missing else "All recommended security headers present."
+        )
     elif check == "error_disclosure":
         leaked = [p for p in ERROR_DISCLOSURE_PATTERNS if p in last.text.lower()]
-        finding = "Vulnerable" if leaked else "Secure"
-    elif expected == 429 and repeat > 1:
-        # Rate limiting: secure if ANY attempt was throttled
-        finding = "Secure" if any(r.status_code == 429 for r in responses) else "Vulnerable"
+        finding = FINDING_VULNERABLE if leaked else FINDING_SECURE
+        finding_reason = (
+            f"Disclosed: {', '.join(leaked)}" if leaked else "No verbose error disclosure detected."
+        )
     elif expected in (401, 403):
         if actual_status == 200:
-            finding = "Vulnerable"
+            finding = FINDING_VULNERABLE
+            finding_reason = "Protected resource returned 200 without valid credentials."
         elif actual_status in (401, 403):
-            finding = "Secure"
+            finding = FINDING_SECURE
+            finding_reason = "Request was properly rejected."
         else:
-            finding = "Secure" if actual_status >= 400 else "Vulnerable"
+            finding = FINDING_SECURE if actual_status >= 400 else FINDING_VULNERABLE
+            finding_reason = "Unexpected response status."
     elif expected is not None:
         if actual_status == expected:
-            finding = "Secure"
+            finding = FINDING_SECURE
+            finding_reason = "Response matched expected status."
         elif expected >= 400 and actual_status < 400:
-            finding = "Vulnerable"
+            finding = FINDING_VULNERABLE
+            finding_reason = "Endpoint accepted input that should have been rejected."
         else:
-            finding = "Secure"
+            finding = FINDING_SECURE
+            finding_reason = "Response did not match expected status."
     else:
-        finding = "Secure"
+        finding = FINDING_SECURE
+        finding_reason = "No negative signal observed."
 
     return {
         "test_case_id": str(test.get("id", "")),
         "owasp_category": test.get("owasp_category", ""),
         "severity": test.get("severity", ""),
         "title": test.get("title", ""),
-        "vulnerable": finding == "Vulnerable",
+        "vulnerable": finding == FINDING_VULNERABLE,
         "actual_status": actual_status,
         "actual_response_preview": preview,
         "finding": finding,
+        "finding_reason": finding_reason,
         "remediation": test.get("remediation", ""),
         "payload_used": payload,
         "duration_ms": duration_ms,

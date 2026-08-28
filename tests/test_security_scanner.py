@@ -156,21 +156,24 @@ def test_network_failure_returns_error_finding(mock_request):
 
 @patch("core.security_scanner.safe_request")
 def test_rate_limit_secure_when_any_429(mock_request):
-    mock_request.side_effect = [_resp(status=200) for _ in range(9)] + [_resp(status=429)]
+    mock_request.side_effect = [_resp(status=200) for _ in range(14)] + [_resp(status=429)]
     test = {"id": "SEC-API6-01", "owasp_category": "API6:2023 - ...", "severity": "Medium",
-            "title": "rate", "payload": {"repeat": 10}, "expected_status": 429, "remediation": "fix"}
+            "title": "rate", "payload": {"repeat": 15}, "expected_status": 429, "remediation": "fix"}
     result = execute_security_test(test, ENDPOINT, "GET")
     assert result["finding"] == "Secure"
-    assert mock_request.call_count == 10
+    assert result["finding_reason"]
+    assert mock_request.call_count == 15
 
 
 @patch("core.security_scanner.safe_request")
-def test_rate_limit_vulnerable_when_never_throttled(mock_request):
+def test_rate_limit_needs_review_when_never_throttled(mock_request):
     mock_request.return_value = _resp(status=200)
     test = {"id": "SEC-API6-01", "owasp_category": "API6:2023 - ...", "severity": "Medium",
-            "title": "rate", "payload": {"repeat": 10}, "expected_status": 429, "remediation": "fix"}
+            "title": "rate", "payload": {"repeat": 15}, "expected_status": 429, "remediation": "fix"}
     result = execute_security_test(test, ENDPOINT, "GET")
-    assert result["finding"] == "Vulnerable"
+    assert result["finding"] == "Needs Review"
+    assert result["finding_reason"]
+    assert result["finding"] != "Vulnerable"
 
 
 @patch("core.security_scanner.safe_request")
@@ -207,14 +210,106 @@ def test_error_disclosure_check(mock_request):
 
 @patch("core.security_scanner.safe_request")
 def test_ssrf_query_param_applied(mock_request):
+    # The probe request is first; baseline is fetched second during classification.
     mock_request.return_value = _resp(status=400)
     test = {"id": "SEC-API7-01", "owasp_category": "API7:2023 - ...", "severity": "High",
             "title": "ssrf",
             "payload": {"set_param": {"location": "query", "name": "url", "value": "http://127.0.0.1/"}},
             "expected_status": 400, "remediation": "fix"}
     execute_security_test(test, "https://api.example.com/fetch?url=https://x.com", "GET")
-    args, _ = mock_request.call_args
+    # First call is the probe; second call is the baseline differential fetch.
+    args, _ = mock_request.call_args_list[0]
     assert "url=http%3A%2F%2F127.0.0.1%2F" in args[1]
+
+
+@patch("core.security_scanner.safe_request")
+def test_ssrf_vulnerable_on_body_signal(mock_request):
+    probe = _resp(status=200, text="connection refused while fetching http://127.0.0.1/")
+    baseline = _resp(status=200, text="normal public response")
+    mock_request.side_effect = [probe, baseline]
+    test = {"id": "SEC-API7-01", "owasp_category": "API7:2023 - SSRF", "severity": "High",
+            "title": "ssrf",
+            "payload": {"set_param": {"location": "query", "name": "url", "value": "http://127.0.0.1/"}},
+            "expected_status": 400, "remediation": "fix"}
+    result = execute_security_test(test, "https://api.example.com/fetch?url=https://x.com", "GET")
+    assert result["finding"] == "Vulnerable"
+    assert "internal-fetch evidence" in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_ssrf_secure_when_param_rejected(mock_request):
+    probe = _resp(status=400, text="invalid url parameter")
+    baseline = _resp(status=200, text="normal")
+    mock_request.side_effect = [probe, baseline]
+    test = {"id": "SEC-API7-01", "owasp_category": "API7:2023 - SSRF", "severity": "High",
+            "title": "ssrf",
+            "payload": {"set_param": {"location": "query", "name": "url", "value": "http://127.0.0.1/"}},
+            "expected_status": 400, "remediation": "fix"}
+    result = execute_security_test(test, "https://api.example.com/fetch?url=https://x.com", "GET")
+    assert result["finding"] == "Secure"
+    assert "rejected" in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_ssrf_needs_review_when_no_signal(mock_request):
+    probe = _resp(status=200, text="normal")
+    baseline = _resp(status=200, text="normal")
+    mock_request.side_effect = [probe, baseline]
+    test = {"id": "SEC-API7-01", "owasp_category": "API7:2023 - SSRF", "severity": "High",
+            "title": "ssrf",
+            "payload": {"set_param": {"location": "query", "name": "url", "value": "http://127.0.0.1/"}},
+            "expected_status": 400, "remediation": "fix"}
+    result = execute_security_test(test, "https://api.example.com/fetch?url=https://x.com", "GET")
+    assert result["finding"] == "Needs Review"
+    assert "out-of-band" in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_ssrf_500_is_needs_review_not_error(mock_request):
+    probe = _resp(status=500, text="internal server error")
+    baseline = _resp(status=200, text="normal")
+    mock_request.side_effect = [probe, baseline]
+    test = {"id": "SEC-API7-01", "owasp_category": "API7:2023 - SSRF", "severity": "High",
+            "title": "ssrf",
+            "payload": {"set_param": {"location": "query", "name": "url", "value": "http://127.0.0.1/"}},
+            "expected_status": 400, "remediation": "fix"}
+    result = execute_security_test(test, "https://api.example.com/fetch?url=https://x.com", "GET")
+    assert result["finding"] == "Needs Review"
+    assert result["finding"] != "Error"
+
+
+@patch("core.security_scanner.safe_request")
+def test_bfla_vulnerable_on_200(mock_request):
+    mock_request.return_value = _resp(status=200)
+    test = {"id": "SEC-API5-01", "owasp_category": "API5:2023 - BFLA", "severity": "High",
+            "title": "admin", "payload": {"modified_endpoint": "https://api.example.com/admin/users/1"},
+            "expected_status": 403, "remediation": "fix"}
+    result = execute_security_test(test, ENDPOINT, "GET")
+    assert result["finding"] == "Vulnerable"
+    assert "non-admin credentials" in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_bfla_secure_on_403(mock_request):
+    mock_request.return_value = _resp(status=403)
+    test = {"id": "SEC-API5-01", "owasp_category": "API5:2023 - BFLA", "severity": "High",
+            "title": "admin", "payload": {"modified_endpoint": "https://api.example.com/admin/users/1"},
+            "expected_status": 403, "remediation": "fix"}
+    result = execute_security_test(test, ENDPOINT, "GET")
+    assert result["finding"] == "Secure"
+    assert "denied" in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_bfla_needs_review_on_404(mock_request):
+    mock_request.return_value = _resp(status=404)
+    test = {"id": "SEC-API5-01", "owasp_category": "API5:2023 - BFLA", "severity": "High",
+            "title": "admin", "payload": {"modified_endpoint": "https://api.example.com/admin/users/1"},
+            "expected_status": 403, "remediation": "fix"}
+    result = execute_security_test(test, ENDPOINT, "GET")
+    assert result["finding"] == "Needs Review"
+    assert result["finding"] != "Secure"
+    assert "404" in result["finding_reason"]
 
 
 # --- calculate_risk_score ---
@@ -240,6 +335,14 @@ def test_risk_score_capped_at_100():
 
 def test_risk_score_empty():
     assert calculate_risk_score([]) == 0
+
+
+def test_needs_review_contributes_zero_risk_score():
+    findings = [
+        {"severity": "High", "vulnerable": False, "finding": "Needs Review"},
+        {"severity": "Medium", "vulnerable": False, "finding": "Needs Review"},
+    ]
+    assert calculate_risk_score(findings) == 0
 
 
 if __name__ == "__main__":

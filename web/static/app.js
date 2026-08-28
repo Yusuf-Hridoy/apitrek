@@ -627,6 +627,7 @@ document.addEventListener('DOMContentLoaded', () => {
         scanSummary.innerHTML =
             `<span class="chip">${s.total_tests || 0} tests</span>` +
             `<span class="chip status-vulnerable">${s.vulnerable_count || 0} vulnerable</span>` +
+            `<span class="chip status-review">${s.needs_review_count || 0} needs review</span>` +
             `<span class="chip">Critical: ${s.critical || 0}</span>` +
             `<span class="chip">High: ${s.high || 0}</span>` +
             `<span class="chip">Medium: ${s.medium || 0}</span>` +
@@ -665,8 +666,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         findingsBody.innerHTML = '';
         findings.forEach((f) => {
-            const statusCls = f.finding === 'Vulnerable' ? 'status-vulnerable' : (f.finding === 'Secure' ? 'status-secure' : 'status-error');
-            const rowCls = f.finding === 'Vulnerable' ? 'finding-vulnerable' : 'finding-secure';
+            const verdict = f.finding || '';
+            const statusCls =
+                verdict === 'Vulnerable' ? 'status-vulnerable' :
+                verdict === 'Secure' ? 'status-secure' :
+                verdict === 'Needs Review' ? 'status-review' : 'status-error';
+            const rowCls =
+                verdict === 'Vulnerable' ? 'finding-vulnerable' :
+                verdict === 'Needs Review' ? 'finding-review' : 'finding-secure';
             const owaspShort = (f.owasp_category || '').split(' - ')[0];
 
             const tr = document.createElement('tr');
@@ -684,6 +691,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const detailTd = document.createElement('td');
             detailTd.colSpan = 5;
             let detailHtml = `<strong>OWASP:</strong> ${escapeHtml(f.owasp_category || '')}<br>`;
+            if (f.finding_reason) {
+                detailHtml += `<strong>Reason:</strong> ${escapeHtml(f.finding_reason)}<br>`;
+            }
             detailHtml += `<strong>Payload used:</strong><pre class="payload-display">${escapeHtml(JSON.stringify(f.payload_used || {}, null, 2))}</pre>`;
             if (f.error_message) {
                 detailHtml += `<div class="assertion-fail">${escapeHtml(f.error_message)}</div>`;

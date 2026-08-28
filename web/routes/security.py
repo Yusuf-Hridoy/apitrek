@@ -61,6 +61,9 @@ def _build_summary(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
                 summary[key] += 1
     summary["total_tests"] = len(findings)
     summary["vulnerable_count"] = sum(1 for f in findings if f.get("vulnerable"))
+    summary["needs_review_count"] = sum(
+        1 for f in findings if f.get("finding") == "Needs Review"
+    )
     return summary
 
 
