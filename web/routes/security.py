@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -21,10 +21,12 @@ from core.security_scanner import (
     execute_security_test,
     generate_security_tests,
 )
+from core.url_guard import validate_public_url, BlockedURLError
 from exports.security_report_generator import (
     generate_html_report,
     generate_markdown_report,
 )
+from web.limiter import limiter, LIMIT_SECURITY_SCAN
 from core.database import save_session, save_test_cases
 
 router = APIRouter(tags=["security"])

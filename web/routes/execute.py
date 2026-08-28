@@ -8,10 +8,12 @@ from typing import Any, Dict, List, Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from core.test_executor import execute_test_case, execute_test_suite
+from core.url_guard import validate_public_url, BlockedURLError
+from web.limiter import limiter, LIMIT_EXECUTE_SUITE, LIMIT_EXECUTE_SINGLE
 from core.database import save_execution_results
 
 router = APIRouter(tags=["execute"])
@@ -58,10 +60,17 @@ def _build_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 @router.post("/execute-tests")
-def execute_tests(payload: ExecuteRequest) -> Dict[str, Any]:
+@limiter.limit(LIMIT_EXECUTE_SUITE)
+def execute_tests(request: Request, payload: ExecuteRequest) -> Dict[str, Any]:
     """Execute a suite of test cases and return results with a summary."""
     if not payload.endpoint or not payload.endpoint.strip():
         raise HTTPException(status_code=422, detail="Endpoint is required.")
+
+    endpoint = payload.endpoint.strip()
+    try:
+        validate_public_url(endpoint)
+    except BlockedURLError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     test_cases = payload.test_cases
     if payload.test_case_ids:
@@ -71,7 +80,7 @@ def execute_tests(payload: ExecuteRequest) -> Dict[str, Any]:
     try:
         results = execute_test_suite(
             test_cases,
-            endpoint=payload.endpoint.strip(),
+            endpoint=endpoint,
             method=payload.method.upper(),
             headers=payload.headers,
             body=payload.body,
@@ -89,15 +98,22 @@ def execute_tests(payload: ExecuteRequest) -> Dict[str, Any]:
 
 
 @router.post("/execute-single")
-def execute_single(payload: ExecuteSingleRequest) -> Dict[str, Any]:
+@limiter.limit(LIMIT_EXECUTE_SINGLE)
+def execute_single(request: Request, payload: ExecuteSingleRequest) -> Dict[str, Any]:
     """Execute a single test case and return its result."""
     if not payload.endpoint or not payload.endpoint.strip():
         raise HTTPException(status_code=422, detail="Endpoint is required.")
 
+    endpoint = payload.endpoint.strip()
+    try:
+        validate_public_url(endpoint)
+    except BlockedURLError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     try:
         result = execute_test_case(
             payload.test_case,
-            endpoint=payload.endpoint.strip(),
+            endpoint=endpoint,
             method=payload.method.upper(),
             headers=payload.headers,
             body=payload.body,
