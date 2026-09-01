@@ -267,6 +267,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let cicdContent = null;
     let cicdFile = null;
 
+    function setCicdActionsEnabled(enabled) {
+        cicdCopyBtn.disabled = !enabled;
+        cicdDownloadBtn.disabled = !enabled;
+        cicdCopyBtn.classList.toggle('disabled', !enabled);
+        cicdDownloadBtn.classList.toggle('disabled', !enabled);
+    }
+
+    // Start disabled until a successful pipeline fetch populates content.
+    setCicdActionsEnabled(false);
+
     cicdCards.forEach((card) => {
         card.addEventListener('click', async () => {
             if (!lastResult) {
@@ -295,6 +305,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) {
                     showError(data.detail || `Export failed (${res.status})`);
+                    setCicdActionsEnabled(false);
+                    return;
+                }
+
+                if (!data.yaml_content || !data.yaml_content.trim()) {
+                    showError('Pipeline generation returned no content — please regenerate the test cases and try again.');
+                    cicdPreview.classList.add('hidden');
+                    setCicdActionsEnabled(false);
                     return;
                 }
 
@@ -303,8 +321,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 cicdYaml.textContent = cicdContent;
                 cicdFilename.textContent = cicdFile;
                 cicdPreview.classList.remove('hidden');
+                setCicdActionsEnabled(true);
             } catch (err) {
                 showError('Export failed. Please make sure the server is running.');
+                setCicdActionsEnabled(false);
             }
         });
     });
@@ -1356,6 +1376,7 @@ document.addEventListener('DOMContentLoaded', () => {
         cicdCards.forEach((c) => c.classList.remove('selected'));
         cicdContent = null;
         cicdFile = null;
+        setCicdActionsEnabled(false);
         executionSummary.classList.add('hidden');
         executionProgress.classList.add('hidden');
         caseCards = [];
@@ -1380,8 +1401,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!degradedBanner) return;
         if (data._degraded) {
             degradedBanner.innerHTML =
-                '⚡ <strong>AI providers were unavailable</strong> — showing baseline test cases generated deterministically. ' +
-                'Reconnect an AI provider for richer, context-aware cases.';
+                'ℹ️ <strong>Showing baseline test cases.</strong> ' +
+                'These are generated deterministically from the endpoint and response. ' +
+                'Richer, context-aware cases appear when AI generation is enabled.';
             degradedBanner.classList.remove('hidden');
         } else {
             degradedBanner.classList.add('hidden');
