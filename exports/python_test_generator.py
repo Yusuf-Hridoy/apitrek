@@ -7,6 +7,8 @@ import json
 import re
 from typing import Any, Dict, List
 
+from exports.assertion_translator import extract_field, to_pytest
+
 
 def _sanitize_name(name: str) -> str:
     """Convert a title into a valid Python function name."""
@@ -52,21 +54,7 @@ def _build_assertions_for_case(case: Dict[str, Any]) -> List[str]:
     if validation_rules:
         lines.append("    data = response.json()")
         for rule in validation_rules:
-            lines.append(f"    # Validation: {rule}")
-            words = rule.split()
-            field = words[0] if words else ""
-            lower_rule = rule.lower()
-            if field.isidentifier():
-                if "should be present" in lower_rule or "should exist" in lower_rule:
-                    lines.append(f'    assert "{field}" in data')
-                elif "should be integer" in lower_rule:
-                    lines.append(f'    assert isinstance(data["{field}"], int)')
-                elif "should be string" in lower_rule:
-                    lines.append(f'    assert isinstance(data["{field}"], str)')
-                elif "should be boolean" in lower_rule:
-                    lines.append(f'    assert isinstance(data["{field}"], bool)')
-                elif "should be float" in lower_rule or "should be number" in lower_rule:
-                    lines.append(f'    assert isinstance(data["{field}"], (float, int))')
+            lines.extend(to_pytest(rule))
     return lines
 
 
@@ -142,8 +130,12 @@ def _generate_assertion_tests(assertions: List[Dict[str, Any]]) -> List[str]:
             f"def {name}():",
             f'    """[{severity}] {category}: {rule}"""',
             "    response = _make_request(HTTP_METHOD, ENDPOINT)",
-            "    assert response.status_code == 200  # Adjust if expected behavior differs",
         ]
+        if extract_field(rule):
+            test_lines.append("    data = response.json()")
+            test_lines.extend(to_pytest(rule))
+        else:
+            test_lines.append("    assert response.status_code == 200  # adjust as needed")
         tests.append("\n".join(test_lines))
 
     return tests

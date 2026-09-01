@@ -105,7 +105,7 @@ def test_generate_with_validation_rules():
     assert 'assert isinstance(data["id"], int)' in script
     assert 'assert isinstance(data["name"], str)' in script
     assert 'assert isinstance(data["active"], bool)' in script
-    assert 'assert isinstance(data["score"], (float, int))' in script
+    assert 'assert isinstance(data["score"], (int, float))' in script
     assert 'assert "email" in data' in script
 
 

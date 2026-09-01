@@ -7,6 +7,8 @@ import json
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+from exports.assertion_translator import to_postman
+
 
 def _parse_url(url: str) -> Dict[str, Any]:
     """Parse a URL into Postman URL object format."""
@@ -66,31 +68,8 @@ def _build_test_script(expected: Dict[str, Any]) -> List[str]:
     validation_rules = expected.get("validation_rules")
     if validation_rules:
         for rule in validation_rules:
-            lines.append(f'pm.test("{rule}", function () {{')
-            words = rule.split()
-            field = words[0] if words else ""
-            lower_rule = rule.lower()
-
-            if field and field.isidentifier():
-                if "should be present" in lower_rule or "should exist" in lower_rule:
-                    lines.append("    var jsonData = pm.response.json();")
-                    lines.append(f'    pm.expect(jsonData).to.have.property("{field}");')
-                elif "should be integer" in lower_rule:
-                    lines.append("    var jsonData = pm.response.json();")
-                    lines.append(f'    pm.expect(jsonData.{field}).to.be.a("number");')
-                elif "should be string" in lower_rule:
-                    lines.append("    var jsonData = pm.response.json();")
-                    lines.append(f'    pm.expect(jsonData.{field}).to.be.a("string");')
-                elif "should be boolean" in lower_rule:
-                    lines.append("    var jsonData = pm.response.json();")
-                    lines.append(f'    pm.expect(jsonData.{field}).to.be.a("boolean");')
-                elif "should be float" in lower_rule or "should be number" in lower_rule:
-                    lines.append("    var jsonData = pm.response.json();")
-                    lines.append(f'    pm.expect(jsonData.{field}).to.be.a("number");')
-                else:
-                    lines.append(f"    // Validation: {rule}")
-            else:
-                lines.append(f"    // Validation: {rule}")
+            lines.append(f'pm.test({json.dumps(rule)}, function () {{')
+            lines.extend(to_postman(rule))
             lines.append("});")
             lines.append("")
 
@@ -146,10 +125,10 @@ def _build_assertion_item(assertion: Dict[str, Any], endpoint: str, method: str)
     severity = assertion.get("severity", "medium")
 
     script_lines = [
-        f'pm.test("[{severity}] {category}: {rule}", function () {{',
-        '    pm.response.to.have.status(200);',
-        "});",
+        f'pm.test({json.dumps(f"[{severity}] {category}: {rule}")}, function () {{',
     ]
+    script_lines.extend(to_postman(rule))
+    script_lines.append("});")
 
     return {
         "name": f"[{severity}] {rule}",
