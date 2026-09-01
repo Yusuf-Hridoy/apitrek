@@ -112,6 +112,23 @@ class MistralClient:
 
                 return content.strip()
 
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                status = None
+                if e.response is not None:
+                    status = e.response.status_code
+                # Fatal auth errors: fail fast so the router can move to the
+                # next provider instead of burning retries on a bad key/tier.
+                if status in (401, 403):
+                    raise MistralClientError(
+                        f"Mistral request failed with status {status}. "
+                        "Check your API key and model tier."
+                    )
+                # Retryable HTTP errors (429, 5xx, etc.) still back off.
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY_SECONDS * attempt)
+                continue
+
             except requests.exceptions.RequestException as e:
                 last_error = e
                 if attempt < MAX_RETRIES:

@@ -98,5 +98,44 @@ def test_send_prompt_truncated(mock_session_class):
         client.send_prompt("system", "user")
 
 
+@patch("llm.mistral_client.requests.Session")
+def test_send_prompt_fatal_auth_error_fails_fast(mock_session_class):
+    """401/403 should not retry; the router needs to fail over immediately."""
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 403
+    mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+        "403 Forbidden", response=mock_response
+    )
+    mock_session.post.return_value = mock_response
+    mock_session_class.return_value = mock_session
+
+    client = MistralClient(api_key="test-key")
+    with pytest.raises(MistralClientError, match="403"):
+        client.send_prompt("system", "user")
+
+    assert mock_session.post.call_count == 1
+
+
+@patch("llm.mistral_client.requests.Session")
+def test_send_prompt_timeout_then_success(mock_session_class):
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.raise_for_status.return_value = None
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": "retry success"}}]
+    }
+    mock_session.post.side_effect = [
+        requests.exceptions.Timeout("Network timeout"),
+        mock_response,
+    ]
+    mock_session_class.return_value = mock_session
+
+    client = MistralClient(api_key="test-key")
+    result = client.send_prompt("system", "user")
+    assert result == "retry success"
+    assert mock_session.post.call_count == 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
