@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any, Dict, List
 
-from exports.assertion_translator import extract_field, to_pytest
+from exports.assertion_translator import pytest_assertions
 
 
 def _sanitize_name(name: str) -> str:
@@ -42,7 +42,7 @@ def _build_request_helper() -> str:
 '''
 
 
-def _build_assertions_for_case(case: Dict[str, Any]) -> List[str]:
+def _build_assertions_for_case(case: Dict[str, Any], sample: Any) -> List[str]:
     """Extract structured assertions from a test case."""
     lines = []
     expected = case.get("expected", {}) or {}
@@ -52,13 +52,11 @@ def _build_assertions_for_case(case: Dict[str, Any]) -> List[str]:
 
     validation_rules = expected.get("validation_rules")
     if validation_rules:
-        lines.append("    data = response.json()")
-        for rule in validation_rules:
-            lines.extend(to_pytest(rule))
+        lines.extend(pytest_assertions(sample, validation_rules))
     return lines
 
 
-def _generate_case_tests(cases: List[Dict[str, Any]], prefix: str) -> List[str]:
+def _generate_case_tests(cases: List[Dict[str, Any]], prefix: str, sample: Any) -> List[str]:
     """Generate test function strings from a list of test cases."""
     tests = []
     seen_names = set()
@@ -95,7 +93,7 @@ def _generate_case_tests(cases: List[Dict[str, Any]], prefix: str) -> List[str]:
             f'    response = _make_request("{test_method}", ENDPOINT{json_arg})',
         ]
 
-        assertion_lines = _build_assertions_for_case(case)
+        assertion_lines = _build_assertions_for_case(case, sample)
         if not assertion_lines:
             test_lines.append("    assert response is not None")
         else:
@@ -106,7 +104,11 @@ def _generate_case_tests(cases: List[Dict[str, Any]], prefix: str) -> List[str]:
     return tests
 
 
-def _generate_assertion_tests(assertions: List[Dict[str, Any]]) -> List[str]:
+def _has_real_assert(lines: List[str]) -> bool:
+    return any(line.strip().startswith("assert ") for line in lines)
+
+
+def _generate_assertion_tests(assertions: List[Dict[str, Any]], sample: Any) -> List[str]:
     """Generate test functions from AI assertion rules."""
     tests = []
     seen_names = set()
@@ -131,9 +133,9 @@ def _generate_assertion_tests(assertions: List[Dict[str, Any]]) -> List[str]:
             f'    """[{severity}] {category}: {rule}"""',
             "    response = _make_request(HTTP_METHOD, ENDPOINT)",
         ]
-        if extract_field(rule):
-            test_lines.append("    data = response.json()")
-            test_lines.extend(to_pytest(rule))
+        assertion_lines = pytest_assertions(sample, [rule])
+        if _has_real_assert(assertion_lines):
+            test_lines.extend(assertion_lines)
         else:
             test_lines.append("    assert response.status_code == 200  # adjust as needed")
         tests.append("\n".join(test_lines))
@@ -163,6 +165,7 @@ def generate_pytest_script(endpoint: str, method: str, test_data: Dict[str, Any]
     negative_cases = test_data.get("negative_test_cases") or []
     edge_cases = test_data.get("edge_cases") or []
     assertions = test_data.get("assertions") or []
+    sample = test_data.get("sample_response")
 
     parts = [
         '"""',
@@ -181,19 +184,19 @@ def generate_pytest_script(endpoint: str, method: str, test_data: Dict[str, Any]
 
     if positive_cases:
         parts.append("\n# --- Positive Test Cases ---")
-        parts.extend(_generate_case_tests(positive_cases, "positive"))
+        parts.extend(_generate_case_tests(positive_cases, "positive", sample))
 
     if negative_cases:
         parts.append("\n# --- Negative Test Cases ---")
-        parts.extend(_generate_case_tests(negative_cases, "negative"))
+        parts.extend(_generate_case_tests(negative_cases, "negative", sample))
 
     if edge_cases:
         parts.append("\n# --- Edge Cases ---")
-        parts.extend(_generate_case_tests(edge_cases, "edge"))
+        parts.extend(_generate_case_tests(edge_cases, "edge", sample))
 
     if assertions:
         parts.append("\n# --- Assertions ---")
-        parts.extend(_generate_assertion_tests(assertions))
+        parts.extend(_generate_assertion_tests(assertions, sample))
 
     if not any([positive_cases, negative_cases, edge_cases, assertions]):
         parts.append("\ndef test_endpoint_is_reachable():")

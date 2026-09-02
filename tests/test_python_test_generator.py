@@ -97,7 +97,14 @@ def test_generate_with_validation_rules():
                     ],
                 },
             }
-        ]
+        ],
+        "sample_response": {
+            "id": 1,
+            "name": "Widget",
+            "active": True,
+            "score": 99.5,
+            "email": "test@example.com",
+        },
     }
     script = generate_pytest_script("https://api.example.com/items", "GET", data)
     assert "assert response.status_code == 200" in script
@@ -106,7 +113,7 @@ def test_generate_with_validation_rules():
     assert 'assert isinstance(data["name"], str)' in script
     assert 'assert isinstance(data["active"], bool)' in script
     assert 'assert isinstance(data["score"], (int, float))' in script
-    assert 'assert "email" in data' in script
+    assert 'assert data["email"] is not None' in script
 
 
 def test_generate_with_post_method_and_body():

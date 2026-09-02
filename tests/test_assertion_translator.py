@@ -1,5 +1,5 @@
 """
-Unit tests for exports.assertion_translator.
+Unit tests for the schema-driven exports.assertion_translator.
 """
 import ast
 import re
@@ -9,96 +9,71 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from exports.assertion_translator import to_postman, to_pytest
+from exports.assertion_translator import pytest_assertions, postman_assertions
 from exports.python_test_generator import generate_pytest_script
+from exports.postman_generator import generate_postman_collection
 
 
-def _has_assert_line(lines):
-    return any(line.strip().startswith("assert ") for line in lines)
+RESP = {
+    "page": 1,
+    "per_page": 6,
+    "total": 12,
+    "data": [{"id": 1, "email": "a@b.co", "first_name": "G"}],
+    "support": {"url": "x", "text": "y"},
+}
 
 
-def test_positive_integer_yields_real_assert():
-    lines = to_pytest("userId is a positive integer")
-    assert _has_assert_line(lines)
+def test_no_prose_field_leak():
+    lines = "\n".join(
+        pytest_assertions(RESP, ["id field is required and should be present"])
+    )
+    assert 'data["required"]' not in lines  # 'required' is prose, not a field
+    assert '"No" in data' not in lines and '"identical" in data' not in lines
+
+
+def test_only_real_fields_asserted():
+    lines = pytest_assertions(
+        RESP, ["first_name should be a string", "total is a positive integer"]
+    )
     text = "\n".join(lines)
-    assert 'data["userId"]' in text
-    # "positive" takes precedence over "integer"
-    assert "data[\"userId\"] > 0" in text or "isinstance(data[\"userId\"], int)" in text
+    assert 'isinstance(data["total"], int)' in text
+    # first_name lives under a list -> accessor must index [0]
+    assert 'data["data"][0]["first_name"]' in text
 
 
-def test_matches_id_literal():
-    lines = to_pytest("id field matches requested ID (1)")
-    assert _has_assert_line(lines)
+def test_unmatched_rule_is_skipped_not_asserted():
+    lines = pytest_assertions(RESP, ["the response should be identical to the schema"])
     text = "\n".join(lines)
-    assert 'data["id"]' in text
-    # Either a literal equality or a safe presence fallback is acceptable;
-    # the important thing is that it is a real assert, not just a comment.
-    assert "data[\"id\"] == 1" in text or '"id" in data' in text
+    assert "identical" in text  # present only as a comment
+    assert 'assert "identical"' not in text
+    assert 'data["identical"]' not in text
 
 
-def test_quoted_field_presence():
-    lines = to_pytest('body has field "price"')
-    assert _has_assert_line(lines)
-    assert any('assert "price" in data' in line for line in lines)
+def test_no_response_no_field_asserts():
+    assert pytest_assertions(None, ["id should be present"]) == []
 
 
-def test_string_type_assert():
-    lines = to_pytest("rating should be a string")
-    assert _has_assert_line(lines)
-    assert any('assert isinstance(data["rating"], str)' in line for line in lines)
+def test_list_root_response():
+    lines = pytest_assertions([{"id": 1, "name": "x"}], ["id present"])
+    text = "\n".join(lines)
+    assert "isinstance(data, list)" in text
+    assert "item" in text  # uses data[0] via item
 
 
-def test_to_pytest_never_comment_only():
-    rules = [
-        "userId is a positive integer",
-        "id field matches requested ID (1)",
-        'body has field "price"',
-        "rating should be a string",
-        "email should be present",
-        "active should be boolean",
-        "score should be a number",
-        "tags should be an array",
-        "name is not null",
-        "count should equal 10",
-        "some weird unmatched rule",
-    ]
-    for rule in rules:
-        lines = to_pytest(rule)
-        assert _has_assert_line(lines), f"Rule produced no assert line: {rule}"
+def test_postman_no_prose_leak():
+    lines = "\n".join(postman_assertions(RESP, ["id is required"]))
+    assert "jsonData.required" not in lines and "jsonData['required']" not in lines
 
 
-def test_postman_presence():
-    lines = to_postman("name should be present")
-    assert any('pm.expect(jsonData).to.have.property("name")' in line for line in lines)
+def test_postman_real_fields_only():
+    lines = postman_assertions(RESP, ["first_name should be a string"])
+    text = "\n".join(lines)
+    assert 'jsonData["data"][0]["first_name"]' in text
+    assert "jsonData.required" not in text
 
 
-def test_postman_string_type():
-    lines = to_postman("name should be a string")
-    assert any('pm.expect(jsonData.name).to.be.a("string")' in line for line in lines)
-
-
-def test_postman_number_type():
-    lines = to_postman("score should be a number")
-    assert any('pm.expect(jsonData.score).to.be.a("number")' in line for line in lines)
-
-
-def test_postman_never_comment_only():
-    rules = [
-        "userId is a positive integer",
-        "id field matches requested ID (1)",
-        'body has field "price"',
-        "rating should be a string",
-        "email should be present",
-    ]
-    for rule in rules:
-        lines = to_postman(rule)
-        assert any(line.strip().startswith("pm.expect") for line in lines), (
-            f"Rule produced no pm.expect line: {rule}"
-        )
-
-
-def test_pytest_export_has_no_comment_only_validations():
-    """Regression guard: no exported case or assertion may be comment-only."""
+def test_pytest_export_only_asserts_real_fields():
+    """Full-script regression: every field asserted on must exist in sample_response."""
     test_data = {
         "positive_test_cases": [
             {
@@ -107,11 +82,9 @@ def test_pytest_export_has_no_comment_only_validations():
                 "expected": {
                     "status_code": 200,
                     "validation_rules": [
-                        "id field matches requested ID (1)",
-                        "userId is a positive integer",
-                        "body has field \"price\"",
-                        "rating should be a string",
-                        "email should be present",
+                        "id field is required and should be present",
+                        "first_name should be a string",
+                        "total is a positive integer",
                     ],
                 },
             }
@@ -119,18 +92,70 @@ def test_pytest_export_has_no_comment_only_validations():
         "assertions": [
             {"rule": "name should be present", "category": "data", "severity": "medium"},
         ],
+        "sample_response": RESP,
     }
     script = generate_pytest_script("https://api.example.com/items/1", "GET", test_data)
-    # Must be valid Python.
-    ast.parse(script)
+    ast.parse(script)  # valid Python
 
-    # Every "# Validation:" comment must be followed by an assert line before the
-    # next blank line or function definition.
-    for match in re.finditer(r"^    # Validation: .*$", script, re.MULTILINE):
-        start = match.end()
-        # Look at the next few lines for an assert.
-        snippet = script[start : start + 300]
-        next_lines = [ln for ln in snippet.splitlines() if ln.strip()]
-        assert next_lines and next_lines[0].strip().startswith("assert "), (
-            f"Comment-only validation found near: {match.group(0)}"
-        )
+    # Collect top-level keys actually present in the sample response.
+    real_keys = set(RESP.keys())
+    for case in RESP.get("data", [])[:1]:
+        real_keys.update(case.keys())
+
+    # Every data["<key>"] accessor must reference a real top-level key.
+    for match in re.finditer(r'data\["([^"]+)"\]', script):
+        key = match.group(1)
+        assert key in real_keys, f"Script asserts unknown field: {key}"
+
+    # No prose tokens from rules should appear as asserts.
+    assert 'assert "required"' not in script
+    assert 'assert "positive"' not in script
+
+
+def test_postman_export_only_checks_real_fields():
+    """Postman regression: no jsonData.<prose> accessors, only real fields."""
+    test_data = {
+        "positive_test_cases": [
+            {
+                "id": "TC-POS-01",
+                "title": "Valid response",
+                "expected": {
+                    "status_code": 200,
+                    "validation_rules": [
+                        "id field is required and should be present",
+                        "first_name should be a string",
+                    ],
+                },
+            }
+        ],
+        "sample_response": RESP,
+    }
+    collection = generate_postman_collection(
+        "https://api.example.com/items/1", "GET", test_data
+    )
+    # Must be valid JSON.
+    import json
+
+    parsed = json.loads(collection)
+    script = "\n".join(
+        parsed["item"][0]["event"][0]["script"]["exec"]
+    )
+    assert "jsonData.required" not in script
+    assert 'jsonData["data"][0]["first_name"]' in script
+
+
+def test_generate_route_includes_sample_response():
+    """The generate endpoint must forward sample_response in its result."""
+    from web.routes.generate import GenerateRequest, generate_tests
+    from fastapi import Request
+    from unittest.mock import MagicMock
+
+    sample = {"id": 1, "title": "x"}
+    payload = GenerateRequest(
+        endpoint="https://example.com/api",
+        method="GET",
+        sample_response=sample,
+    )
+    request = MagicMock(spec=Request)
+    result = generate_tests(request, payload)
+    assert result.get("sample_response") == sample

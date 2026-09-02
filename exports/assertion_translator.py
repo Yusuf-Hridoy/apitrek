@@ -1,142 +1,179 @@
 """
-Translate a natural-language validation rule into an executable assertion,
-for both the pytest and Postman exporters. Field/intent detection mirrors
-core.generator._is_grounded so exported asserts line up with grounding.
+Schema-driven assertion generation for the pytest and Postman exporters.
+
+Assertions are derived from the ACTUAL fetched JSON response — we only assert
+on fields that exist in it, with the type read from the real value. A rule can
+refine a real field; a rule that maps to no real field is skipped (commented),
+never turned into an assertion. This mirrors the grounding system: no field in
+the response -> no assertion.
 """
-import json
 import re
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-_FIELD_QUOTED = re.compile(r'["\']([A-Za-z_][\w.]*)["\']')
-_FIELD_DOTTED = re.compile(r'\b([A-Za-z_]\w*(?:\.\w+)+)\b')
-_STOP = {
-    "response", "body", "field", "is", "a", "the", "of", "must", "should",
-    "be", "not", "null", "present", "returns", "contains", "and", "or",
-    "valid", "json", "within", "under", "each", "all", "an", "with", "value",
-    "status", "code", "positive", "negative", "integer", "number", "string",
-    "boolean", "array", "list", "matches", "equal", "equals", "exist", "exists",
-}
+# path segments; each element is (key, is_list) so we can build correct accessors
+FieldPath = Tuple[Tuple[str, bool], ...]
 
 
-def extract_field(rule: str) -> Optional[str]:
-    m = _FIELD_QUOTED.search(rule) or _FIELD_DOTTED.search(rule)
-    if m:
-        return m.group(1)
-    for tok in re.findall(r"\b[A-Za-z_]\w*\b", rule):
-        if tok.lower() not in _STOP:
-            return tok
-    return None
-
-
-def _literal(rule: str) -> Optional[str]:
-    """Return a safely parseable literal value (number, bool, or quoted string)."""
-    # Numeric or boolean after equality/comparison keywords.
-    m = re.search(
-        r'(?:==|equals?|matches|should be)\s+(-?\d+(?:\.\d+)?|true|false)',
-        rule,
-        re.I,
-    )
-    if m:
-        val = m.group(1)
-        if val.lower() in ("true", "false"):
-            return val.capitalize()
-        return val
-
-    # Parenthesized numeric/boolean values such as "matches requested ID (1)".
-    m = re.search(r'\(\s*(-?\d+(?:\.\d+)?|true|false)\s*\)', rule, re.I)
-    if m:
-        val = m.group(1)
-        if val.lower() in ("true", "false"):
-            return val.capitalize()
-        return val
-
-    # Quoted strings after equality/comparison keywords.
-    m = re.search(
-        r'(?:==|equals?|matches|should be)\s+([\'"])([A-Za-z0-9_.\- ]+)\1',
-        rule,
-        re.I,
-    )
-    if m:
-        return f'"{m.group(2)}"'
-
-    return None
-
-
-def _pyexpr(field: str, rule: str) -> str:
-    low = rule.lower()
-    acc = f'data["{field}"]'
-    if any(k in low for k in ("not null", "non-null", "not empty", "required")):
-        return f"assert {acc} is not None"
-    if "positive" in low:
-        return f"assert {acc} > 0"
-    if any(k in low for k in ("boolean", "bool", "true/false")):
-        return f'assert isinstance({acc}, bool)'
-    if any(k in low for k in ("array", "list")):
-        return f'assert isinstance({acc}, list)'
-    if any(k in low for k in ("float", "decimal", "numeric", "number")):
-        return f'assert isinstance({acc}, (int, float))'
-    if any(k in low for k in ("integer", " int", "int ")):
-        return f'assert isinstance({acc}, int)'
-    if any(k in low for k in ("string", "text", " str")):
-        return f'assert isinstance({acc}, str)'
-    # Presence intents must be checked before literal equality, otherwise
-    # "should be present" is misread as equality to the string "present".
-    if any(k in low for k in ("present", "exist", "has field", "contains", "included", "return")):
-        return f'assert "{field}" in data'
-    lit = _literal(rule)
-    if lit is not None:
-        return f"assert {acc} == {lit}"
-    return f'assert "{field}" in data'  # safe default: presence
-
-
-def to_pytest(rule: str) -> List[str]:
-    """Return lines: the doc comment plus a real assert."""
-    field = extract_field(rule)
-    out = [f"    # Validation: {rule}"]
-    if not field:
-        out.append("    assert response is not None")
-        return out
-    out.append("    " + _pyexpr(field, rule))
+def _flatten(obj: Any, prefix: FieldPath = ()) -> Dict[FieldPath, Any]:
+    """Map real field paths -> sample value. Lists descend into the first item."""
+    out: Dict[FieldPath, Any] = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            path = prefix + ((k, False),)
+            out[path] = v
+            if isinstance(v, dict):
+                out.update(_flatten(v, path))
+            elif isinstance(v, list) and v and isinstance(v[0], (dict, list)):
+                # mark this leaf as a list, descend into element shape
+                list_path = prefix + ((k, True),)
+                out.update(_flatten(v[0], list_path))
     return out
 
 
-def _pmexpr(field: str, rule: str) -> List[str]:
+def _accessor(path: FieldPath, prefix: str = "data") -> str:
+    """Build a Python accessor: (('data', True),('id', False)) -> data["data"][0]["id"]"""
+    acc = prefix
+    for key, is_list in path:
+        acc += f'["{key}"]'
+        if is_list:
+            acc += "[0]"
+    return acc
+
+
+def _js_accessor(path: FieldPath, prefix: str = "jsonData") -> str:
+    acc = prefix
+    for key, is_list in path:
+        acc += f'["{key}"]'
+        if is_list:
+            acc += "[0]"
+    return acc
+
+
+def _pytype(v: Any) -> Optional[str]:
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, int):
+        return "int"
+    if isinstance(v, float):
+        return "(int, float)"
+    if isinstance(v, str):
+        return "str"
+    if isinstance(v, list):
+        return "list"
+    if isinstance(v, dict):
+        return "dict"
+    return None
+
+
+def _jstype(v: Any) -> Optional[str]:
+    if isinstance(v, bool):
+        return "boolean"
+    if isinstance(v, (int, float)):
+        return "number"
+    if isinstance(v, str):
+        return "string"
+    if isinstance(v, list):
+        return "array"
+    if isinstance(v, dict):
+        return "object"
+    return None
+
+
+def _match_rule(rule: str, fields: Dict[FieldPath, Any]) -> Optional[FieldPath]:
+    """Return a real field path the rule refers to (longest leaf match wins)."""
     low = rule.lower()
-    acc = f"jsonData.{field}"
-    lines = ["    var jsonData = pm.response.json();"]
-    if any(k in low for k in ("not null", "non-null", "not empty", "required")):
-        lines.append(f'    pm.expect({acc}).to.not.be.null;')
-    elif "positive" in low:
-        lines.append(f'    pm.expect({acc}).to.be.above(0);')
-    elif any(k in low for k in ("boolean", "bool")):
-        lines.append(f'    pm.expect({acc}).to.be.a("boolean");')
-    elif any(k in low for k in ("array", "list")):
-        lines.append(f'    pm.expect({acc}).to.be.an("array");')
-    elif any(k in low for k in ("float", "decimal", "numeric", "number", "integer", " int")):
-        lines.append(f'    pm.expect({acc}).to.be.a("number");')
-    elif any(k in low for k in ("string", "text", " str")):
-        lines.append(f'    pm.expect({acc}).to.be.a("string");')
-    elif any(k in low for k in ("present", "exist", "has field", "contains", "included", "return")):
-        lines.append(f'    pm.expect(jsonData).to.have.property("{field}");')
+    for path in sorted(fields, key=lambda p: len(p[-1][0]), reverse=True):
+        leaf = path[-1][0].lower()
+        if re.search(rf"\b{re.escape(leaf)}\b", low):
+            return path
+    return None
+
+
+def pytest_assertions(response: Any, rules: List[str]) -> List[str]:
+    """Real pytest asserts from the fetched response + rules. Never asserts a
+    field that isn't in the response."""
+    if response is None or not isinstance(response, (dict, list)):
+        return []  # no schema -> caller falls back to status/structural only
+
+    root_is_list = isinstance(response, list)
+    lines = ["    data = response.json()"]
+    if root_is_list:
+        lines.append("    assert isinstance(data, list) and len(data) > 0")
+        sample = response[0] if response else {}
+        fields = _flatten(sample)
+        lines.append("    item = data[0]")
+        prefix_acc = "item"
     else:
-        lit = _literal(rule)
-        if lit is not None:
-            try:
-                parsed = json.loads(lit)
-                if isinstance(parsed, bool):
-                    js_lit = lit.lower()
-                else:
-                    js_lit = lit
-            except (ValueError, TypeError):
-                js_lit = lit
-            lines.append(f'    pm.expect({acc}).to.eql({js_lit});')
-        else:
-            lines.append(f'    pm.expect(jsonData).to.have.property("{field}");')
+        fields = _flatten(response)
+        prefix_acc = "data"
+
+    used: set = set()
+
+    def acc_for(path: FieldPath) -> str:
+        return _accessor(path, prefix_acc)
+
+    # 1) rule-guided refinement — only for real fields
+    for rule in rules or []:
+        path = _match_rule(rule, fields)
+        if not path or path in used:
+            lines.append(f"    # (no matching response field) {rule}")
+            continue
+        used.add(path)
+        a = acc_for(path)
+        t = _pytype(fields[path])
+        lines.append(f"    # Validation: {rule}")
+        lines.append(f"    assert {a} is not None")
+        if t:
+            lines.append(f"    assert isinstance({a}, {t})")
+
+    # 2) schema baseline for top-level real fields not already covered
+    for path, v in fields.items():
+        if len(path) != 1 or path in used:
+            continue
+        t = _pytype(v)
+        if t:
+            a = acc_for(path)
+            lines.append(f"    assert isinstance({a}, {t})")
+
     return lines
 
 
-def to_postman(rule: str) -> List[str]:
-    field = extract_field(rule)
-    if not field:
+def postman_assertions(response: Any, rules: List[str]) -> List[str]:
+    """Real Postman pm.expect checks from the fetched response + rules."""
+    if response is None or not isinstance(response, (dict, list)):
         return ["    pm.expect(pm.response.code).to.be.below(500);"]
-    return _pmexpr(field, rule)
+
+    lines = ["    var jsonData = pm.response.json();"]
+    if isinstance(response, list):
+        lines.append("    pm.expect(jsonData).to.be.an('array');")
+        sample = response[0] if response else {}
+        fields = _flatten(sample)
+        prefix = "jsonData[0]"
+    else:
+        fields = _flatten(response)
+        prefix = "jsonData"
+
+    def acc_for(path: FieldPath) -> str:
+        return _js_accessor(path, prefix)
+
+    used: set = set()
+    for rule in rules or []:
+        path = _match_rule(rule, fields)
+        if not path or path in used:
+            continue
+        used.add(path)
+        a = acc_for(path)
+        t = _jstype(fields[path])
+        if t:
+            if t in ("array", "object"):
+                lines.append(f"    pm.expect({a}).to.be.an('{t}');")
+            else:
+                lines.append(f"    pm.expect({a}).to.be.a('{t}');")
+
+    for path, v in fields.items():
+        if len(path) != 1 or path in used:
+            continue
+        t = _jstype(v)
+        if t:
+            lines.append(f'    pm.expect(jsonData).to.have.property("{path[0][0]}");')
+    return lines

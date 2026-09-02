@@ -7,7 +7,7 @@ import json
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from exports.assertion_translator import to_postman
+from exports.assertion_translator import postman_assertions
 
 
 def _parse_url(url: str) -> Dict[str, Any]:
@@ -55,7 +55,7 @@ def _build_body(body: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     }
 
 
-def _build_test_script(expected: Dict[str, Any]) -> List[str]:
+def _build_test_script(expected: Dict[str, Any], sample: Any) -> List[str]:
     """Generate Postman test-script lines from expected assertions."""
     lines: List[str] = []
     status_code = expected.get("status_code")
@@ -67,16 +67,17 @@ def _build_test_script(expected: Dict[str, Any]) -> List[str]:
 
     validation_rules = expected.get("validation_rules")
     if validation_rules:
-        for rule in validation_rules:
-            lines.append(f'pm.test({json.dumps(rule)}, function () {{')
-            lines.extend(to_postman(rule))
+        assertion_lines = postman_assertions(sample, validation_rules)
+        if assertion_lines:
+            lines.append(f'pm.test("Response schema is valid", function () {{')
+            lines.extend(assertion_lines)
             lines.append("});")
             lines.append("")
 
     return lines
 
 
-def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method: str) -> Dict[str, Any]:
+def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method: str, sample: Any) -> Dict[str, Any]:
     """Build a Postman item from a single test case."""
     title = case.get("title", "Untitled")
     case_id = case.get("id", "")
@@ -88,7 +89,7 @@ def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method
     request_body = request_info.get("body")
 
     expected = case.get("expected", {}) or {}
-    script_lines = _build_test_script(expected)
+    script_lines = _build_test_script(expected, sample)
 
     item: Dict[str, Any] = {
         "name": f"{case_id} - {title}" if case_id else title,
@@ -118,16 +119,20 @@ def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method
     return item
 
 
-def _build_assertion_item(assertion: Dict[str, Any], endpoint: str, method: str) -> Dict[str, Any]:
+def _build_assertion_item(assertion: Dict[str, Any], endpoint: str, method: str, sample: Any) -> Dict[str, Any]:
     """Build a Postman item from an assertion rule."""
     rule = assertion.get("rule", "Assertion")
     category = assertion.get("category", "general")
     severity = assertion.get("severity", "medium")
 
+    assertion_lines = postman_assertions(sample, [rule])
     script_lines = [
         f'pm.test({json.dumps(f"[{severity}] {category}: {rule}")}, function () {{',
     ]
-    script_lines.extend(to_postman(rule))
+    if assertion_lines:
+        script_lines.extend(assertion_lines)
+    else:
+        script_lines.append("    pm.expect(pm.response.code).to.be.below(500);")
     script_lines.append("});")
 
     return {
@@ -181,17 +186,18 @@ def generate_postman_collection(
     negative_cases = test_data.get("negative_test_cases") or []
     edge_cases = test_data.get("edge_cases") or []
     assertions = test_data.get("assertions") or []
+    sample = test_data.get("sample_response")
 
     items: List[Dict[str, Any]] = []
 
     for case in positive_cases:
-        items.append(_build_case_item(case, endpoint, method))
+        items.append(_build_case_item(case, endpoint, method, sample))
     for case in negative_cases:
-        items.append(_build_case_item(case, endpoint, method))
+        items.append(_build_case_item(case, endpoint, method, sample))
     for case in edge_cases:
-        items.append(_build_case_item(case, endpoint, method))
+        items.append(_build_case_item(case, endpoint, method, sample))
     for assertion in assertions:
-        items.append(_build_assertion_item(assertion, endpoint, method))
+        items.append(_build_assertion_item(assertion, endpoint, method, sample))
 
     if not items:
         # Minimal fallback collection with a smoke-test request

@@ -129,6 +129,10 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
     if "_error" in result:
         raise HTTPException(status_code=502, detail=result["_error"])
 
+    # expose the fetched response so exporters can build schema-driven assertions
+    if sample_response is not None:
+        result["sample_response"] = sample_response
+
     # Persist the session for history (best-effort; never breaks generation)
     try:
         session_id = save_session(

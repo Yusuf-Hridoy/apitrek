@@ -112,17 +112,24 @@ def test_generate_with_validation_rules():
                     ],
                 },
             }
-        ]
+        ],
+        "sample_response": {
+            "id": 1,
+            "name": "Widget",
+            "active": True,
+            "score": 99.5,
+            "email": "test@example.com",
+        },
     }
     collection = generate_postman_collection("https://api.example.com/items", "GET", test_data)
     data = json.loads(collection)
     exec_lines = data["item"][0]["event"][0]["script"]["exec"]
     exec_text = "\n".join(exec_lines)
-    assert 'pm.expect(jsonData.id).to.be.a("number")' in exec_text
-    assert 'pm.expect(jsonData.name).to.be.a("string")' in exec_text
-    assert 'pm.expect(jsonData.active).to.be.a("boolean")' in exec_text
-    assert 'pm.expect(jsonData.score).to.be.a("number")' in exec_text
-    assert 'pm.expect(jsonData).to.have.property("email")' in exec_text
+    assert 'pm.expect(jsonData["id"]).to.be.a(\'number\')' in exec_text
+    assert 'pm.expect(jsonData["name"]).to.be.a(\'string\')' in exec_text
+    assert 'pm.expect(jsonData["active"]).to.be.a(\'boolean\')' in exec_text
+    assert 'pm.expect(jsonData["score"]).to.be.a(\'number\')' in exec_text
+    assert 'pm.expect(jsonData["email"]).to.be.a(\'string\')' in exec_text
 
 
 def test_generate_with_post_method_and_body():
