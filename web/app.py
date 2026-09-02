@@ -1,6 +1,7 @@
 """
 FastAPI entry point for the Smart API Testing Assistant web UI.
 """
+import hashlib
 import sys
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse
 
 from web.limiter import limiter
 from web.routes.generate import router as generate_router
@@ -76,7 +77,31 @@ app.include_router(openapi.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "web" / "static")), name="static")
 
+_STATIC_DIR = PROJECT_ROOT / "web" / "static"
+_INDEX_HTML = PROJECT_ROOT / "web" / "templates" / "index.html"
+
+
+def _asset_version() -> str:
+    """Short hash of the static assets so the URL version changes when they do."""
+    h = hashlib.md5()
+    for name in ("app.js", "style.css", "darkmode.js"):
+        p = _STATIC_DIR / name
+        if p.exists():
+            h.update(p.read_bytes())
+    return h.hexdigest()[:8]
+
 
 @app.get("/")
 async def index(request: Request):
-    return FileResponse(str(PROJECT_ROOT / "web" / "templates" / "index.html"))
+    html = _INDEX_HTML.read_text(encoding="utf-8")
+    v = _asset_version()
+    html = (
+        html
+        .replace("/static/app.js", f"/static/app.js?v={v}")
+        .replace("/static/style.css", f"/static/style.css?v={v}")
+        .replace("/static/darkmode.js", f"/static/darkmode.js?v={v}")
+    )
+    return HTMLResponse(
+        html,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
