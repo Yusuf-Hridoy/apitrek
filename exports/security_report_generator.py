@@ -58,10 +58,11 @@ def generate_markdown_report(scan_results: Dict[str, Any], endpoint: str) -> str
         "|---|---|---|---|---|",
     ]
     for f in findings:
+        safe_title = f.get('title', '').replace('|', '\\|')
         lines.append(
             f"| {f.get('severity', '')} "
             f"| {f.get('owasp_category', '')} "
-            f"| {f.get('title', '').replace('|', '\\|')} "
+            f"| {safe_title} "
             f"| {f.get('finding', '')} "
             f"| {f.get('actual_status', '')} |"
         )
