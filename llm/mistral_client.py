@@ -18,8 +18,17 @@ if _env_path.exists():
 DEFAULT_MODEL = "mistral-large-latest"
 MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 2
+# Transient upstream conditions worth retrying; anything else fails fast so the
+# router can fail over to the next provider instead of burning retries.
+TRANSIENT_STATUSES = {429, 502, 503, 504}
+_MAX_BACKOFF_SECONDS = 6
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+
+
+def _retry_delay(attempt: int) -> float:
+    """Exponential backoff: ~2s, 4s, 8s… capped at _MAX_BACKOFF_SECONDS."""
+    return min(RETRY_DELAY_SECONDS * (2 ** attempt), _MAX_BACKOFF_SECONDS)
 
 
 class MistralClientError(Exception):
@@ -124,21 +133,27 @@ class MistralClient:
                         f"Mistral request failed with status {status}. "
                         "Check your API key and model tier."
                     )
-                # Retryable HTTP errors (429, 5xx, etc.) still back off.
+                # Non-transient HTTP errors (400, 404, …) won't fix themselves.
+                if status not in TRANSIENT_STATUSES:
+                    raise MistralClientError(
+                        f"Mistral request failed with status {status}."
+                    ) from e
+                # Transient errors (429, 502/503/504) back off exponentially.
                 if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY_SECONDS * attempt)
+                    time.sleep(_retry_delay(attempt))
                 continue
 
             except requests.exceptions.RequestException as e:
+                # Timeouts / connection errors are transient — retry.
                 last_error = e
                 if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY_SECONDS * attempt)
+                    time.sleep(_retry_delay(attempt))
                 continue
 
             except (KeyError, ValueError) as e:
                 last_error = e
                 if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY_SECONDS * attempt)
+                    time.sleep(_retry_delay(attempt))
                 continue
 
         raise MistralClientError(

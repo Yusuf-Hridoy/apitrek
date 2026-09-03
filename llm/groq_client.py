@@ -23,8 +23,17 @@ if _env_path.exists():
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 2
+# Same transient set as llm.mistral_client — keep the two clients' retry
+# behavior interchangeable for the router.
+TRANSIENT_STATUSES = {429, 502, 503, 504}
+_MAX_BACKOFF_SECONDS = 6
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+
+
+def _retry_delay(attempt: int) -> float:
+    """Exponential backoff: ~2s, 4s, 8s… capped at _MAX_BACKOFF_SECONDS."""
+    return min(RETRY_DELAY_SECONDS * (2 ** attempt), _MAX_BACKOFF_SECONDS)
 
 
 class GroqClientError(Exception):
@@ -117,16 +126,37 @@ class GroqClient:
 
                 return content.strip()
 
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                status = None
+                if e.response is not None:
+                    status = e.response.status_code
+                # Fatal auth errors fail fast; non-transient statuses won't fix
+                # themselves either. Only the transient set backs off and retries.
+                if status in (401, 403):
+                    raise GroqClientError(
+                        f"Groq request failed with status {status}. "
+                        "Check your API key and model tier."
+                    )
+                if status not in TRANSIENT_STATUSES:
+                    raise GroqClientError(
+                        f"Groq request failed with status {status}."
+                    ) from e
+                if attempt < MAX_RETRIES:
+                    time.sleep(_retry_delay(attempt))
+                continue
+
             except requests.exceptions.RequestException as e:
+                # Timeouts / connection errors are transient — retry.
                 last_error = e
                 if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY_SECONDS * attempt)
+                    time.sleep(_retry_delay(attempt))
                 continue
 
             except (KeyError, ValueError) as e:
                 last_error = e
                 if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY_SECONDS * attempt)
+                    time.sleep(_retry_delay(attempt))
                 continue
 
         raise GroqClientError(

@@ -61,8 +61,9 @@ def test_send_prompt_success(mock_session_class):
     assert payload["max_tokens"] == 8192
 
 
+@patch("llm.groq_client.time.sleep")
 @patch("llm.groq_client.requests.Session")
-def test_send_prompt_retries_then_fails(mock_session_class):
+def test_send_prompt_retries_then_fails(mock_session_class, mock_sleep):
     mock_session = MagicMock()
     mock_session.post.side_effect = requests.exceptions.ConnectionError("Network error")
     mock_session_class.return_value = mock_session
@@ -93,8 +94,8 @@ def test_send_prompt_exponential_backoff(mock_session_class, mock_sleep):
     result = client.send_prompt("system", "user")
     assert result == "ok"
     assert mock_session.post.call_count == 2
-    # Backoff delay: 2 * 1 on the first failure only
-    assert [c.args[0] for c in mock_sleep.call_args_list] == [2]
+    # Exponential backoff on the first failure only: 2 * (2 ** 1) = 4
+    assert [c.args[0] for c in mock_sleep.call_args_list] == [4]
 
 
 @patch("llm.groq_client.requests.Session")
