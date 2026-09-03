@@ -205,8 +205,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 const el = document.getElementById(id);
                 if (el) el.value = '';
             });
-            // Reuse the existing submit pipeline — do not duplicate fetch/render.
-            if (form.requestSubmit) {
+            // The button performs the action of the currently active mode:
+            // a security scan in Security mode, generation otherwise.
+            if (document.body.classList.contains('security-mode-active')) {
+                // The scan handler rejects with no category selected, so for a
+                // one-click sample select all if the user hasn't picked any.
+                const boxes = owaspCategoriesEl.querySelectorAll('input[type="checkbox"]');
+                if (boxes.length && !selectedCategories().length) {
+                    boxes.forEach((cb) => { cb.checked = true; });
+                }
+                runScanBtn.click();  // single scan code path — no duplicate fetch
+            } else if (form.requestSubmit) {
                 form.requestSubmit();
             } else {
                 form.dispatchEvent(new Event('submit', { cancelable: true }));
