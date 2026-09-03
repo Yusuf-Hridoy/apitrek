@@ -2185,11 +2185,16 @@ button:active:not(:disabled) {
 .case-item:hover { transform: none; box-shadow: none; }
 .case-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 0.5rem;
     padding: 0.5rem 0.7rem;
     cursor: pointer;
 }
+/* keep the row controls optically centered against a 1-2 line title */
+.case-row .case-id,
+.case-row .case-row-tags,
+.case-row .btn-run,
+.case-row .chevron { margin-top: 1px; }
 .case-row:hover { background: var(--bg-inset); }
 .case-row .case-id {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -2202,9 +2207,12 @@ button:active:not(:disabled) {
     min-width: 0;
     font-weight: 500;
     font-size: 0.85rem;
-    white-space: nowrap;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
+    padding-top: 1px;
 }
 .case-row-tags { display: inline-flex; gap: 0.25rem; flex-shrink: 0; }
 .case-row .btn-run { flex-shrink: 0; padding: 0.2rem 0.6rem; font-size: 0.75rem; }
