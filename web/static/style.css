@@ -1853,6 +1853,11 @@ button:active:not(:disabled) {
     min-height: 360px;
 }
 
+/* results column fills the viewport better on tall desktops */
+@media (min-width: 1024px) {
+    .results-panel { min-height: calc(100vh - 220px); }
+}
+
 .panel-title {
     font-size: 1.05rem;
     font-weight: 600;
