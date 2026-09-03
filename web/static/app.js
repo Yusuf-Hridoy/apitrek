@@ -542,6 +542,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const runScanBtn = document.getElementById('runScanBtn');
     const riskScoreFill = document.getElementById('riskScoreFill');
     const riskScoreLabel = document.getElementById('riskScoreLabel');
+    const riskContextNote = document.getElementById('riskContextNote');
     const scanSummary = document.getElementById('scanSummary');
     const findingsBody = document.getElementById('findingsBody');
     const exportSecMdBtn = document.getElementById('exportSecMdBtn');
@@ -658,11 +659,30 @@ document.addEventListener('DOMContentLoaded', () => {
         return { cls: 'risk-green', label: 'Low Risk' };
     }
 
+    // Public, auth-less demo APIs: access-control findings reflect the missing
+    // auth by design, not a real vulnerability — say so next to the score.
+    const PUBLIC_DEMO_HOSTS = ['jsonplaceholder.typicode.com', 'reqres.in', 'fakestoreapi.com'];
+
+    function renderRiskContextNote() {
+        if (!riskContextNote) return;
+        let host = '';
+        try {
+            host = new URL(document.getElementById('endpoint').value.trim()).hostname;
+        } catch (err) { host = ''; }
+        if (PUBLIC_DEMO_HOSTS.includes(host)) {
+            riskContextNote.textContent = 'This target is a public, auth-less demo API — access-control findings reflect that it has no auth by design, not a real vulnerability. Scan an authenticated API for a meaningful risk score.';
+            riskContextNote.classList.remove('hidden');
+        } else {
+            riskContextNote.classList.add('hidden');
+        }
+    }
+
     function renderScanResults(data) {
         const band = riskBand(data.risk_score || 0);
         riskScoreFill.style.width = `${data.risk_score || 0}%`;
         riskScoreFill.className = `risk-score-fill ${band.cls}`;
         riskScoreLabel.textContent = `Risk Score: ${data.risk_score}/100 — ${band.label}`;
+        renderRiskContextNote();
 
         const s = data.summary || {};
         scanSummary.innerHTML =

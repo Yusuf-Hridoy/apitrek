@@ -1853,6 +1853,18 @@ button:active:not(:disabled) {
     min-height: 360px;
 }
 
+/* Context note for scans against public, auth-less demo APIs */
+.risk-context-note {
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    background: var(--bg-inset);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
 /* results column fills the viewport better on tall desktops */
 @media (min-width: 1024px) {
     .results-panel { min-height: calc(100vh - 220px); }
