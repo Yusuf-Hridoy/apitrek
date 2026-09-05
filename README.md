@@ -1,4 +1,4 @@
-# API Sentinel
+# Apitrek
 
 **Trustworthy AI-powered API testing** — generates test cases from any endpoint,
 labels every assertion by whether it's grounded in the real API response, runs an
@@ -14,7 +14,7 @@ OWASP security scan, and exports runnable pytest/Postman suites.
 
 Most tools that generate API tests with an LLM will happily assert on fields that
 don't exist — the model hallucinates a field, and the "test" either false-passes
-or errors on nonsense. API Sentinel checks every generated assertion against the
+or errors on nonsense. Apitrek checks every generated assertion against the
 real fetched response and labels it:
 
 - **✓ verified** — the field exists in the actual API response

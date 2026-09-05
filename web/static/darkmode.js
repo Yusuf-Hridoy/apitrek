@@ -1,5 +1,5 @@
 /**
- * API Sentinel dark mode.
+ * Apitrek dark mode.
  * Loaded before app.js so the theme applies before first paint logic runs.
  * Priority: saved preference > system preference > light.
  */

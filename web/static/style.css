@@ -1665,7 +1665,7 @@ button:active:not(:disabled) {
 }
 
 /* =========================================================
-   Dashboard shell redesign (API Sentinel)
+   Dashboard shell redesign (Apitrek)
    ========================================================= */
 .app-shell {
     display: flex;

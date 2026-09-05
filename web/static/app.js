@@ -591,7 +591,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const VIEW_META = {
         history: { title: 'History', subtitle: 'Reload, rerun, or delete past sessions' },
         collections: { title: 'Collections', subtitle: 'Saved request collections' },
-        documentation: { title: 'Documentation', subtitle: 'How to use API Sentinel' },
+        documentation: { title: 'Documentation', subtitle: 'How to use Apitrek' },
     };
 
     function setActiveNav(id) {
