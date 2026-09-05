@@ -23,7 +23,7 @@ def test_mistral_client_uses_env_key():
     with patch.dict("os.environ", {"MISTRAL_API_KEY": "test-key"}, clear=True):
         client = MistralClient()
         assert client.api_key == "test-key"
-        assert client.model == "mistral-large-latest"
+        assert client.model == "mistral-small-latest"
 
 
 def test_mistral_client_uses_custom_model():

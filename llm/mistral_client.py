@@ -15,7 +15,7 @@ if _env_path.exists():
     load_dotenv(_env_path)
 
 
-DEFAULT_MODEL = "mistral-large-latest"
+DEFAULT_MODEL = "mistral-small-latest"
 MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 2
 # Transient upstream conditions worth retrying; anything else fails fast so the
