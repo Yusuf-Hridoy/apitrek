@@ -1,89 +1,109 @@
-# API Sentinel — Smart API Testing Assistant
+# API Sentinel
 
-AI-powered API testing suite. Point it at an endpoint and it generates positive,
-negative, and edge-case tests plus assertions — which you can **execute live**,
-**export** (pytest / Postman / CI-CD), **scan for OWASP API security issues**, and
-**validate against an OpenAPI contract**. Every run is saved to a local history.
+**Trustworthy AI-powered API testing** — generates test cases from any endpoint,
+labels every assertion by whether it's grounded in the real API response, runs an
+OWASP security scan, and exports runnable pytest/Postman suites.
+
+🔗 **Live demo:** https://apitrek-production.up.railway.app
+
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688)
+
+## What makes it different: grounded assertions
+
+Most tools that generate API tests with an LLM will happily assert on fields that
+don't exist — the model hallucinates a field, and the "test" either false-passes
+or errors on nonsense. API Sentinel checks every generated assertion against the
+real fetched response and labels it:
+
+- **✓ verified** — the field exists in the actual API response
+- **⚠ unverified** — a model guess you should confirm before trusting
+
+Exports only assert on fields that really exist, so the pytest or Postman suite
+you download runs clean instead of KeyError-ing on a hallucinated field.
+
+<!-- TODO: screenshot of grounding badges (✓ verified / ⚠ unverified in the UI) -->
 
 ## Features
 
-- **AI test generation** — positive / negative / edge cases + assertions from an
-  endpoint (and an optional or auto-fetched sample response).
-- **Multi-provider AI with automatic failover** — Mistral (primary), then Groq and
-  GitHub Models if a provider is unavailable. Only the providers you configure keys
-  for are used.
-- **Live fetching** — tick *Auto-fetch* to call the API and generate tests from the
-  real response.
-- **Live execution** — run a single test or the whole suite against the real API;
+- **Grounded test generation** — positive / negative / edge cases + assertions,
+  each labeled verified or unverified against the real response (see above).
+- **Multi-provider AI with automatic failover** — one provider outage doesn't
+  kill a run; only the providers you configure keys for are used.
+- **Deterministic floor** — if no AI provider is available, it still produces
+  baseline tests deterministically, clearly labeled. The tool never hard-fails.
+- **Live execution** — run one test or the whole suite against the real API;
   see PASS/FAIL, assertion detail, and response previews.
-- **OWASP API security scanning** — probe the endpoint against the OWASP API
-  Top-10 (2023) with a risk score and exportable Markdown / HTML report.
+- **OWASP API security scanning** — probe the OWASP API Top 10 (2023) with a
+  risk score and exportable Markdown / HTML report.
 - **OpenAPI import & contract testing** — paste a 3.0/3.1 spec, load an endpoint,
-  and validate live responses against the documented schema.
+  validate live responses against the documented schema.
 - **Exports** — runnable **pytest** script, **Postman** collection (v2.1), and
   **CI/CD** pipelines for GitHub Actions, GitLab CI, and Azure Pipelines.
-- **History** — every generation and run is persisted to SQLite; reload, rerun, or
-  delete past sessions.
-- **Web UI** — single-page app (no build step) with light/dark mode, keyboard
-  shortcuts, and toasts. Also usable via CLI and as a library.
+- **History** — every generation and run persists to SQLite; reload, rerun, delete.
+- **Web UI + CLI + library** — single-page app (no build step, light/dark mode),
+  a CLI, and importable Python functions.
 
-## Setup
+## How it works
 
-1. Create a virtualenv and install dependencies:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
+1. **Analyze** the endpoint and (optionally auto-fetched) response locally — no
+   LLM call is needed to understand the shape of the API.
+2. **Prompt** the AI layer with that analysis; a router tries multiple providers
+   in order, so a single provider's blip doesn't degrade the run.
+3. **Validate & repair** the returned JSON against the expected schema before
+   anything is trusted.
+4. **Ground** every assertion against the real response — the verified/unverified
+   labels come from this step.
+5. **Execute, scan, export** — run live, scan for OWASP issues, or export a suite.
 
-2. Configure API keys:
-   ```bash
-   cp .env.example .env
-   # Edit .env and add at least MISTRAL_API_KEY
-   ```
+If every AI provider is down, step 2 falls back to a deterministic generator
+that still emits baseline tests — labeled as such.
 
-   Only `MISTRAL_API_KEY` is required. `GROQ_API_KEY` and `GITHUB_MODELS_API_KEY`
-   are optional fallbacks used automatically if the primary provider fails.
-
-## Web UI
-
-Start the FastAPI server:
+## Quick start
 
 ```bash
-./venv/bin/python -m uvicorn web.app:app --reload --host 0.0.0.0 --port 8000
+git clone https://github.com/Yusuf-Hridoy/apitrek.git
+cd apitrek
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # add at least one provider key (see table below)
+python -m uvicorn web.app:app --reload --port 8000
 ```
 
-Then open [http://localhost:8000](http://localhost:8000).
+Open http://localhost:8000 and click **Try a sample API** — one click fills a
+safe public endpoint and runs the full pipeline.
 
-- Enter an **API Endpoint** and pick an HTTP method.
-- Tick **Auto-fetch sample response** to call the API and use its real response, or
-  expand **Add headers, body & sample response** to paste one manually.
-- Click **Generate Test Cases**, then run tests individually or **Run All Tests**.
-- Use **Export** for a pytest script, Postman collection, or copy the JSON; expand
-  **Export CI/CD Pipeline** for GitHub / GitLab / Azure configs.
-- Switch to **Security Scanning** to probe the OWASP API Top-10 (authorized targets
-  only). Use **Import from OpenAPI** for contract testing. Open **History** to
-  reload, rerun, or delete past sessions.
+## Usage
 
-## CLI
+### Web UI
 
-The CLI covers functional test generation:
+- Enter an **API Endpoint**, pick a method, tick **Auto-fetch sample response**
+  (or paste one) and click **Generate Test Cases**.
+- Run tests individually or **Run All Tests**; export pytest / Postman / CI-CD.
+- Switch to **Security Scanning** for the OWASP scan, **Import from OpenAPI**
+  for contract testing, **History** to reload past sessions.
+
+### CLI
 
 ```bash
-# Basic
+# Basic generation
 ./venv/bin/python cli/app.py --endpoint https://fakestoreapi.com/products/1 --method GET
 
 # With a sample response file
-./venv/bin/python cli/app.py --endpoint https://fakestoreapi.com/products/1 --sample-response examples/example_input.json
+./venv/bin/python cli/app.py --endpoint https://fakestoreapi.com/products/1 \
+    --sample-response examples/example_input.json
 
 # With inline sample JSON
-./venv/bin/python cli/app.py --endpoint https://fakestoreapi.com/products/1 --sample-json '{"id":1,"title":"Test"}'
+./venv/bin/python cli/app.py --endpoint https://fakestoreapi.com/products/1 \
+    --sample-json '{"id":1,"title":"Test"}'
 
 # Save output to a file (add --compact for minified JSON)
-./venv/bin/python cli/app.py --endpoint https://fakestoreapi.com/products/1 --output results.json
+./venv/bin/python cli/app.py --endpoint https://fakestoreapi.com/products/1 \
+    --output results.json
 ```
 
-## Programmatic Usage
+### Programmatic
 
 ```python
 from core.generator import generate_test_cases
@@ -93,13 +113,14 @@ result = generate_test_cases(
     method="GET",
     sample_response={"id": 1, "title": "Test", "price": 109.95},
 )
-print(result)  # {positive_test_cases, negative_test_cases, edge_cases, assertions}
+# -> {positive_test_cases, negative_test_cases, edge_cases, assertions}
 ```
 
-By default this uses the multi-provider `AIRouter` (Mistral → Groq → GitHub Models).
-Pass your own client via `mistral_client=` to override.
+By default this routes through the multi-provider AI layer with automatic
+failover. Pass your own client instance to plug in any LLM client that exposes
+a `send_prompt` method.
 
-## HTTP API
+### HTTP API
 
 | Method & path | Purpose |
 |---------------|---------|
@@ -112,21 +133,35 @@ Pass your own client via `mistral_client=` to override.
 | `POST /api/security/scan` | Run an OWASP API security scan |
 | `POST /api/security/report` | Export a Markdown / HTML security report |
 | `POST /api/openapi/parse` | Parse an OpenAPI 3.0/3.1 spec |
+| `POST /api/openapi/contract-tests` | Generate contract tests from a spec |
 | `POST /api/openapi/validate-response` | Validate a response against a schema |
 | `GET/POST/DELETE /api/history/sessions...` | List / read / rerun / delete history |
 
 Interactive docs are available at `/docs` while the server is running.
 
-## Running Tests
+## Configuration
 
-```bash
-./venv/bin/python -m pytest tests/ -v
+The AI layer uses multiple providers with automatic failover, plus a
+deterministic fallback that generates baseline tests if no provider is
+available. Configure at least one provider key in `.env` to enable AI
+generation — only the providers you configure are ever called.
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `MISTRAL_API_KEY` | Yes* | Primary AI provider key |
+| `GROQ_API_KEY` | No | Secondary provider key (automatic fallback) |
+| `GITHUB_MODELS_API_KEY` | No | Tertiary provider key (automatic fallback) |
+| `DATABASE_PATH` | No | SQLite history location (default `data/api_sentinel.db`) |
+| `LLM_TIMEOUT_SECONDS` | No | Per-provider request timeout (default `30`) |
+| `RATE_LIMIT_*` | No | Per-IP rate limits (see `.env.example`) |
+
+\*At least one provider key is required for AI generation; without any, the
+deterministic floor still produces baseline tests.
+
+## Project structure
+
 ```
-
-## Project Structure
-
-```
-api-testing-assistant/
+apitrek/
 ├── core/
 │   ├── analyzer.py            # Endpoint/response metadata extraction (no LLM)
 │   ├── generator.py           # Orchestrator: analyze → prompt → LLM → validate
@@ -138,47 +173,46 @@ api-testing-assistant/
 │   └── database.py            # SQLite persistence (sessions/cases/results)
 ├── llm/
 │   ├── ai_router.py           # Multi-provider router with failover
-│   ├── mistral_client.py      # Mistral client (raw requests, retries)
-│   ├── groq_client.py         # Groq fallback client
-│   ├── github_models_client.py# GitHub Models fallback client
+│   ├── mistral_client.py      # Primary provider client (retries + backoff)
+│   ├── groq_client.py         # Fallback provider client
+│   ├── github_models_client.py# Fallback provider client
 │   └── prompt_templates.py    # System prompt + user prompt builder
 ├── exports/
-│   ├── python_test_generator.py    # pytest script generation
-│   ├── postman_generator.py        # Postman collection v2.1
-│   ├── cicd_generator.py           # GitHub/GitLab/Azure pipelines
-│   └── security_report_generator.py# Markdown/HTML security reports
+│   ├── python_test_generator.py     # Schema-driven pytest script generation
+│   ├── postman_generator.py         # Postman collection v2.1
+│   ├── cicd_generator.py            # GitHub/GitLab/Azure pipelines
+│   └── security_report_generator.py # Markdown/HTML security reports
 ├── web/
 │   ├── app.py                 # FastAPI entry point (serves UI, mounts routers)
 │   ├── routes/                # generate, execute, security, openapi, cicd,
 │   │                          #   export, history
-│   ├── templates/index.html   # Single-page UI (served via FileResponse)
-│   └── static/                # style.css, app.js, darkmode.js
+│   ├── templates/index.html   # Single-page UI
+│   └── static/                # style.css, app.js, darkmode.js (cache-busted)
 ├── cli/app.py                 # CLI (functional generation)
 ├── examples/                  # example_input.json, example_run.py
 ├── tests/                     # One test file per module
 ├── data/                      # SQLite DB (created at runtime)
 ├── requirements.txt
-├── README.md
-├── IMPLEMENTATION.md          # Phase-by-phase build log
-└── codestructure.md           # Architecture/context reference
+└── LICENSE                    # MIT
 ```
 
-## Environment Variables
+## Testing
 
-| Variable | Required | Default | Purpose |
-|----------|----------|---------|---------|
-| `MISTRAL_API_KEY` | Yes | — | Primary AI provider |
-| `MISTRAL_MODEL` | No | `mistral-large-latest` | Primary model override |
-| `GROQ_API_KEY` | No | — | Fallback provider (enables Groq) |
-| `GROQ_MODEL` | No | `llama-3.3-70b-versatile` | Groq model override |
-| `GITHUB_MODELS_API_KEY` | No | — | Fallback provider (enables GitHub Models) |
-| `GITHUB_MODEL` | No | `gpt-4o` | GitHub Models model override |
-| `DATABASE_PATH` | No | `data/api_sentinel.db` | SQLite history location |
+```bash
+./venv/bin/python -m pytest tests/ -v
+```
+
+261 tests, one file per module — covering the generator, grounding, exporters,
+security scanner, LLM failover/retry, rate limiting, and every HTTP route.
 
 ## Notes
 
-- Built for Python 3.14. The `mistralai` SDK and Jinja2 are intentionally avoided
-  (3.14 wheel/bug issues): the LLM is called via raw `requests`, and the UI is
-  served as a static file.
-- **Security scanning is for authorized targets only** — scan APIs you own or have
-  explicit written permission to test.
+- Targets **Python 3.11+** (the exported CI pipelines pin 3.11, and the codebase
+  is kept 3.11-clean). The LLM is called via raw `requests` rather than an SDK,
+  and the UI is served as static files — no build step, minimal dependencies.
+- **Security scanning is for authorized targets only** — scan APIs you own or
+  have explicit written permission to test.
+
+## License
+
+[MIT](LICENSE)
