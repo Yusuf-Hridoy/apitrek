@@ -881,6 +881,10 @@ document.addEventListener('DOMContentLoaded', () => {
     exportSecHtmlBtn.addEventListener('click', () => exportSecurityReport('html'));
 
     // --- OpenAPI import & contract testing ---
+    // TEMPORARILY HIDDEN: the "Import from OpenAPI" button is removed from the
+    // header, so the wiring below no-ops. To re-enable, restore the button in
+    // index.html (see the breadcrumb comment near .main-header-actions) — the
+    // modal, backend routes, and tests are all intact.
     const importOpenapiBtn = document.getElementById('importOpenapiBtn');
     const openapiModal = document.getElementById('openapiModal');
     const closeOpenapiModalBtn = document.getElementById('closeOpenapiModal');
@@ -895,11 +899,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let parsedSpec = null;
     let selectedContractEndpoint = null;
 
-    importOpenapiBtn.addEventListener('click', () => openapiModal.classList.remove('hidden'));
-    closeOpenapiModalBtn.addEventListener('click', () => openapiModal.classList.add('hidden'));
-    openapiModal.addEventListener('click', (e) => {
-        if (e.target === openapiModal) openapiModal.classList.add('hidden');
-    });
+    if (importOpenapiBtn && openapiModal) {
+        importOpenapiBtn.addEventListener('click', () => openapiModal.classList.remove('hidden'));
+        closeOpenapiModalBtn.addEventListener('click', () => openapiModal.classList.add('hidden'));
+        openapiModal.addEventListener('click', (e) => {
+            if (e.target === openapiModal) openapiModal.classList.add('hidden');
+        });
+    }
 
     function showOpenapiError(msg) {
         openapiError.textContent = msg;
@@ -959,7 +965,7 @@ document.addEventListener('DOMContentLoaded', () => {
         openapiModal.classList.add('hidden');
     }
 
-    parseSpecBtn.addEventListener('click', async () => {
+    if (importOpenapiBtn && openapiModal) parseSpecBtn.addEventListener('click', async () => {
         openapiError.classList.add('hidden');
         const spec = openapiSpecText.value.trim();
         if (!spec) {

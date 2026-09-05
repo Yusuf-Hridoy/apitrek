@@ -37,8 +37,6 @@ you download runs clean instead of KeyError-ing on a hallucinated field.
   see PASS/FAIL, assertion detail, and response previews.
 - **OWASP API security scanning** — probe the OWASP API Top 10 (2023) with a
   risk score and exportable Markdown / HTML report.
-- **OpenAPI import & contract testing** — paste a 3.0/3.1 spec, load an endpoint,
-  validate live responses against the documented schema.
 - **Exports** — runnable **pytest** script, **Postman** collection (v2.1), and
   **CI/CD** pipelines for GitHub Actions, GitLab CI, and Azure Pipelines.
 - **History** — every generation and run persists to SQLite; reload, rerun, delete.
@@ -81,8 +79,8 @@ safe public endpoint and runs the full pipeline.
 - Enter an **API Endpoint**, pick a method, tick **Auto-fetch sample response**
   (or paste one) and click **Generate Test Cases**.
 - Run tests individually or **Run All Tests**; export pytest / Postman / CI-CD.
-- Switch to **Security Scanning** for the OWASP scan, **Import from OpenAPI**
-  for contract testing, **History** to reload past sessions.
+- Switch to **Security Scanning** for the OWASP scan, or open **History** to
+  reload past sessions.
 
 ### CLI
 
@@ -132,9 +130,6 @@ a `send_prompt` method.
 | `GET /api/security/owasp-categories` | List scannable OWASP categories |
 | `POST /api/security/scan` | Run an OWASP API security scan |
 | `POST /api/security/report` | Export a Markdown / HTML security report |
-| `POST /api/openapi/parse` | Parse an OpenAPI 3.0/3.1 spec |
-| `POST /api/openapi/contract-tests` | Generate contract tests from a spec |
-| `POST /api/openapi/validate-response` | Validate a response against a schema |
 | `GET/POST/DELETE /api/history/sessions...` | List / read / rerun / delete history |
 
 Interactive docs are available at `/docs` while the server is running.

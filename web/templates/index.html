@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Apitrek — AI-powered API test generation, live execution, OWASP security scanning, and OpenAPI contract testing.">
+    <meta name="description" content="Apitrek — AI-powered API test generation, live execution, and OWASP security scanning.">
     <meta name="theme-color" content="#0a0f1e">
     <meta property="og:title" content="Apitrek — Smart API Testing Assistant">
-    <meta property="og:description" content="Generate, execute, and secure API tests with AI. OWASP Top 10 scanning and OpenAPI contract validation built in.">
+    <meta property="og:description" content="Generate, execute, and secure API tests with AI. OWASP Top 10 scanning built in.">
     <meta property="og:type" content="website">
     <title>Apitrek — Smart API Testing Assistant</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
@@ -54,9 +54,13 @@
                     <h1 id="viewTitle">Functional Testing</h1>
                     <p id="modeSubtitle" class="subtitle">Generate and execute API test cases</p>
                 </div>
+                <!-- OpenAPI import temporarily hidden — re-add this button to restore
+                     (backend routes, modal below, and tests are all intact):
                 <div class="main-header-actions">
                     <button type="button" id="importOpenapiBtn" class="btn-secondary">Import from OpenAPI</button>
                 </div>
+                -->
+                <div class="main-header-actions hidden"></div>
             </header>
 
             <!-- Testing view (Functional + Security) -->
@@ -366,9 +370,6 @@
 
                     <h2>Security Scanning</h2>
                     <p>Switch to <strong>Security Scanning</strong> to probe the endpoint against the <strong>OWASP API Top 10</strong>. Only scan APIs you own or are authorized to test. Results include a risk score and an exportable Markdown/HTML report.</p>
-
-                    <h2>Import from OpenAPI</h2>
-                    <p>Click <strong>Import from OpenAPI</strong> to paste a 3.0/3.1 spec (JSON or YAML), pick an endpoint to load it into the form, and validate live responses against the documented schema (contract testing).</p>
 
                     <h2>History</h2>
                     <p>Every generation and run is saved. Open <strong>History</strong> to reload, rerun, or delete past sessions.</p>
