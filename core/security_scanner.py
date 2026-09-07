@@ -476,6 +476,22 @@ def execute_security_test(
                 f"No 429 in {len(responses)} rapid requests. This does NOT confirm "
                 "missing rate limiting — the limit may exceed the probe burst."
             )
+    elif test_id == "SEC-API6-02":
+        # Idempotency is an optional design feature, not a security control.
+        # A duplicate write accepted with a normal 2xx is NOT a vulnerability.
+        statuses = [r.status_code for r in responses]
+        if any(s == 409 for s in statuses):
+            finding = FINDING_SECURE
+            finding_reason = "Duplicate write was rejected/deduplicated (409) — idempotency handled."
+        elif all(200 <= s < 300 for s in statuses):
+            finding = FINDING_NEEDS_REVIEW
+            finding_reason = (
+                "Duplicate write accepted without a conflict response. This is common and "
+                "not a vulnerability by itself; consider idempotency keys if replays matter."
+            )
+        else:
+            finding = FINDING_NEEDS_REVIEW
+            finding_reason = f"Duplicate write returned {statuses}; review whether replays are safe."
     elif actual_status >= 500:
         finding = FINDING_ERROR
         finding_reason = "The API returned a server error."

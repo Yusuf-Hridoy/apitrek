@@ -177,6 +177,29 @@ def test_rate_limit_needs_review_when_never_throttled(mock_request):
 
 
 @patch("core.security_scanner.safe_request")
+def test_idempotency_duplicate_201_is_needs_review_not_vulnerable(mock_request):
+    """SEC-API6-02: an accepted duplicate write is not a vulnerability."""
+    mock_request.side_effect = [_resp(status=201), _resp(status=201)]
+    test = {"id": "SEC-API6-02", "owasp_category": "API6:2023 - ...", "severity": "Low",
+            "title": "idem", "payload": {"repeat": 2}, "expected_status": 409, "remediation": "fix"}
+    result = execute_security_test(test, ENDPOINT, "POST", body={"a": 1})
+    assert result["finding"] == "Needs Review"
+    assert result["finding"] != "Vulnerable"
+    assert result["vulnerable"] is False
+    assert "not a vulnerability" in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_idempotency_409_is_secure(mock_request):
+    mock_request.side_effect = [_resp(status=201), _resp(status=409)]
+    test = {"id": "SEC-API6-02", "owasp_category": "API6:2023 - ...", "severity": "Low",
+            "title": "idem", "payload": {"repeat": 2}, "expected_status": 409, "remediation": "fix"}
+    result = execute_security_test(test, ENDPOINT, "POST", body={"a": 1})
+    assert result["finding"] == "Secure"
+    assert result["vulnerable"] is False
+
+
+@patch("core.security_scanner.safe_request")
 def test_security_headers_check(mock_request):
     mock_request.return_value = _resp(status=200, headers={"x-frame-options": "DENY"})
     test = {"id": "SEC-API8-02", "owasp_category": "API8:2023 - ...", "severity": "Medium",
