@@ -668,18 +668,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return { cls: 'risk-green', label: 'Low Risk' };
     }
 
-    // Public, auth-less demo APIs: access-control findings reflect the missing
-    // auth by design, not a real vulnerability — say so next to the score.
-    const PUBLIC_DEMO_HOSTS = ['jsonplaceholder.typicode.com', 'reqres.in', 'fakestoreapi.com'];
-
-    function renderRiskContextNote() {
+    // Endpoints with no auth layer: the scanner detects this from a baseline
+    // request and marks auth findings "Needs Review" — say so next to the score.
+    function renderRiskContextNote(data) {
         if (!riskContextNote) return;
-        let host = '';
-        try {
-            host = new URL(document.getElementById('endpoint').value.trim()).hostname;
-        } catch (err) { host = ''; }
-        if (PUBLIC_DEMO_HOSTS.includes(host)) {
-            riskContextNote.textContent = 'This target is a public, auth-less demo API — access-control findings reflect that it has no auth by design, not a real vulnerability. Scan an authenticated API for a meaningful risk score.';
+        const s = (data && data.summary) || {};
+        if (s.endpoint_is_public === true) {
+            riskContextNote.textContent = 'This endpoint requires no authentication (a normal request succeeds without credentials), so access-control findings are marked "Needs Review" rather than vulnerabilities. Scan an authenticated API for a meaningful risk score.';
             riskContextNote.classList.remove('hidden');
         } else {
             riskContextNote.classList.add('hidden');
@@ -691,7 +686,7 @@ document.addEventListener('DOMContentLoaded', () => {
         riskScoreFill.style.width = `${data.risk_score || 0}%`;
         riskScoreFill.className = `risk-score-fill ${band.cls}`;
         riskScoreLabel.textContent = `Risk Score: ${data.risk_score}/100 — ${band.label}`;
-        renderRiskContextNote();
+        renderRiskContextNote(data);
 
         const s = data.summary || {};
         scanSummary.innerHTML =
@@ -718,13 +713,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function expectedForFinding(f) {
+        if (f.check_kind === 'security_headers') return 'security headers present';
+        if (f.check_kind === 'error_disclosure') return 'no stack traces / secrets';
         const id = f.test_case_id || '';
-        if (id.startsWith('SEC-API6-01')) return '429';
-        if (id.startsWith('SEC-API5-02')) return '405';
-        if (id.startsWith('SEC-API7') || id.startsWith('SEC-API10')) return '400';
-        if (id.startsWith('SEC-API8-01')) return 'clean 400';
-        if (id.startsWith('SEC-API8-02')) return 'headers set';
-        return '401/403';
+        if (id.startsWith('SEC-API7') || id.startsWith('SEC-API10')) return 'no SSRF signal';
+        if (id.startsWith('SEC-API6-01')) return '429 (rate limited)';
+        if (id.startsWith('SEC-API6-02')) return '409 (idempotent) or safe 2xx';
+        if (f.expected_status) return String(f.expected_status);
+        return '—';
     }
 
     function renderFindings() {
@@ -745,6 +741,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 verdict === 'Vulnerable' ? 'finding-vulnerable' :
                 verdict === 'Needs Review' ? 'finding-review' : 'finding-secure';
             const owaspShort = (f.owasp_category || '').split(' - ')[0];
+            // Content-based checks (headers, error disclosure) are judged on the
+            // response body/headers, not the status code — show the reason there.
+            const isContentCheck = f.check_kind === 'security_headers' || f.check_kind === 'error_disclosure';
+            const gotPart = isContentCheck
+                ? `Got <code>${escapeHtml(f.finding_reason || '—')}</code>`
+                : `Got <code>${f.actual_status}</code>`;
 
             const tr = document.createElement('tr');
             tr.className = rowCls;
@@ -752,7 +754,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td><span class="severity-badge severity-${(f.severity || '').toLowerCase()}">${escapeHtml(f.severity || '')}</span></td>
                 <td>${escapeHtml(owaspShort)}</td>
                 <td>${escapeHtml(f.title || '')}</td>
-                <td><span class="${statusCls}">Expected <code>${expectedForFinding(f)}</code>, Got <code>${f.actual_status}</code> &rarr; ${escapeHtml(f.finding || '')}</span></td>
+                <td><span class="${statusCls}">Expected <code>${expectedForFinding(f)}</code>, ${gotPart} &rarr; ${escapeHtml(f.finding || '')}</span></td>
                 <td><button type="button" class="expand-btn">Details <span class="chevron">▾</span></button></td>
             `;
 

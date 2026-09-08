@@ -173,7 +173,7 @@ def generate_security_tests(
 
     # --- API2:2023 Broken Authentication ---
     tests.append(_make_test(
-        "SEC-API2-01", "API2:2023", "Critical",
+        "SEC-API2-01", "API2:2023", "High",
         "Request without authentication token",
         "Send the request with the Authorization header removed. The API must "
         "reject unauthenticated access to protected resources.",
@@ -329,21 +329,47 @@ def _baseline_response(
         return None
 
 
+def detect_auth_context(
+    endpoint: str,
+    method: str,
+    headers: Optional[Dict[str, Any]] = None,
+    body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Detect whether the endpoint enforces authentication at all.
+
+    Fires ONE baseline request (the call as configured, no auth
+    manipulation) for the whole scan. If that request succeeds (2xx) and the
+    user supplied no Authorization header, the endpoint has no auth layer —
+    auth findings are then "not applicable" rather than "vulnerable".
+    """
+    baseline = _baseline_response(endpoint, method, headers, body)
+    if baseline is None:
+        return {"endpoint_is_public": False, "baseline_status": None}
+    has_auth_header = any(k.lower() == "authorization" for k in (headers or {}))
+    endpoint_is_public = 200 <= baseline.status_code < 300 and not has_auth_header
+    return {
+        "endpoint_is_public": endpoint_is_public,
+        "baseline_status": baseline.status_code,
+    }
+
+
 def execute_security_test(
     test: Dict[str, Any],
     endpoint: str,
     method: str,
     headers: Optional[Dict[str, Any]] = None,
     body: Optional[Dict[str, Any]] = None,
+    scan_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Execute one security test and classify the result.
 
     Finding logic:
-      - expected 401/403 but got 200  -> Vulnerable
-      - expected 401/403 and got it   -> Secure
-      - actual 5xx                    -> Error (investigate)
-      - actual == expected otherwise  -> Secure
+      - endpoint public (no auth layer) -> Needs Review (not applicable)
+      - expected 401/403 but got 2xx    -> Vulnerable
+      - expected 401/403 and got it     -> Secure
+      - actual 5xx                      -> Error (investigate)
+      - actual == expected otherwise    -> Secure
     Custom checks (error disclosure, security headers) inspect the response
     content instead of the status code.
     """
@@ -411,6 +437,8 @@ def execute_security_test(
             "finding_reason": "",
             "remediation": test.get("remediation", ""),
             "payload_used": payload,
+            "expected_status": expected,
+            "check_kind": payload.get("check"),
             "duration_ms": duration_ms,
             "error_message": error_message or "No response received",
         }
@@ -509,15 +537,24 @@ def execute_security_test(
             f"Disclosed: {', '.join(leaked)}" if leaked else "No verbose error disclosure detected."
         )
     elif expected in (401, 403):
-        if actual_status == 200:
-            finding = FINDING_VULNERABLE
-            finding_reason = "Protected resource returned 200 without valid credentials."
+        if scan_context and scan_context.get("endpoint_is_public"):
+            # Endpoint has no auth layer — auth findings are not applicable,
+            # not "vulnerable".
+            finding = FINDING_NEEDS_REVIEW
+            finding_reason = (
+                "This endpoint appears to require no authentication (a normal request "
+                "succeeds without credentials), so auth findings are not meaningful here. "
+                "Scan an authenticated endpoint to evaluate authentication controls."
+            )
         elif actual_status in (401, 403):
             finding = FINDING_SECURE
             finding_reason = "Request was properly rejected."
+        elif 200 <= actual_status < 300:
+            finding = FINDING_VULNERABLE
+            finding_reason = "Protected resource returned success without valid credentials."
         else:
-            finding = FINDING_SECURE if actual_status >= 400 else FINDING_VULNERABLE
-            finding_reason = "Unexpected response status."
+            finding = FINDING_NEEDS_REVIEW
+            finding_reason = f"Unexpected status {actual_status}; review manually."
     elif expected is not None:
         if actual_status == expected:
             finding = FINDING_SECURE
@@ -544,6 +581,8 @@ def execute_security_test(
         "finding_reason": finding_reason,
         "remediation": test.get("remediation", ""),
         "payload_used": payload,
+        "expected_status": expected,
+        "check_kind": payload.get("check"),
         "duration_ms": duration_ms,
         "error_message": None,
     }

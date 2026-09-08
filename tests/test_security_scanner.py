@@ -13,6 +13,7 @@ import requests
 from core.security_scanner import (
     OWASP_CATEGORIES,
     calculate_risk_score,
+    detect_auth_context,
     execute_security_test,
     generate_security_tests,
 )
@@ -207,6 +208,9 @@ def test_security_headers_check(mock_request):
             "expected_status": 200, "remediation": "fix"}
     result = execute_security_test(test, ENDPOINT, "GET")
     assert result["finding"] == "Vulnerable"  # most headers missing
+    # The reason names the missing headers (shown in the UI instead of a status code)
+    assert "content-security-policy" in result["finding_reason"]
+    assert "strict-transport-security" in result["finding_reason"]
 
     mock_request.return_value = _resp(status=200, headers={
         "X-Frame-Options": "DENY",
@@ -366,6 +370,122 @@ def test_needs_review_contributes_zero_risk_score():
         {"severity": "Medium", "vulnerable": False, "finding": "Needs Review"},
     ]
     assert calculate_risk_score(findings) == 0
+
+
+# --- auth applicability (scan_context) ---
+
+def _auth_test(test_id="SEC-API2-01"):
+    return {"id": test_id, "owasp_category": "API2:2023 - Broken Authentication",
+            "severity": "High", "title": "No token",
+            "payload": {"remove_headers": ["Authorization"]},
+            "expected_status": 401, "remediation": "fix"}
+
+
+@patch("core.security_scanner.safe_request")
+def test_auth_finding_needs_review_on_public_endpoint(mock_request):
+    """No auth layer detected -> auth findings are not applicable, not vulnerable."""
+    mock_request.return_value = _resp(status=201)
+    result = execute_security_test(
+        _auth_test(), ENDPOINT, "POST", body={"a": 1},
+        scan_context={"endpoint_is_public": True, "baseline_status": 201},
+    )
+    assert result["finding"] == "Needs Review"
+    assert result["finding"] != "Vulnerable"
+    assert result["vulnerable"] is False
+    assert "no authentication" in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_auth_finding_vulnerable_on_201_when_auth_required(mock_request):
+    """A 201 (not just 200) without credentials on a protected endpoint is Vulnerable."""
+    mock_request.return_value = _resp(status=201)
+    result = execute_security_test(
+        _auth_test(), ENDPOINT, "POST", body={"a": 1},
+        scan_context={"endpoint_is_public": False, "baseline_status": 401},
+    )
+    assert result["finding"] == "Vulnerable"
+    assert result["vulnerable"] is True
+
+
+@patch("core.security_scanner.safe_request")
+def test_auth_finding_secure_on_401_when_not_public(mock_request):
+    mock_request.return_value = _resp(status=401)
+    for ctx in ({"endpoint_is_public": False}, None):
+        result = execute_security_test(_auth_test(), ENDPOINT, "GET", scan_context=ctx)
+        assert result["finding"] == "Secure", f"scan_context={ctx}"
+
+
+def test_missing_auth_base_severity_is_high_not_critical():
+    tests = generate_security_tests(ENDPOINT, "GET")
+    api2_01 = next(t for t in tests if t["id"] == "SEC-API2-01")
+    assert api2_01["severity"] == "High"
+
+
+# --- display data sent to the frontend ---
+
+@patch("core.security_scanner.safe_request")
+def test_finding_includes_expected_status_and_check_kind(mock_request):
+    mock_request.return_value = _resp(status=200, headers={"x-frame-options": "DENY"})
+    test = {"id": "SEC-API8-02", "owasp_category": "API8:2023 - ...", "severity": "Medium",
+            "title": "headers", "payload": {"check": "security_headers"},
+            "expected_status": 200, "remediation": "fix"}
+    result = execute_security_test(test, ENDPOINT, "GET")
+    assert result["expected_status"] == 200
+    assert result["check_kind"] == "security_headers"
+
+    # Error findings carry the same display fields (check_kind None when not a
+    # content-based check).
+    mock_request.side_effect = requests.exceptions.ConnectionError("down")
+    test = {"id": "SEC-API2-01", "owasp_category": "API2:2023 - ...", "severity": "High",
+            "title": "t", "payload": {}, "expected_status": 401, "remediation": "fix"}
+    result = execute_security_test(test, ENDPOINT, "GET")
+    assert result["expected_status"] == 401
+    assert result["check_kind"] is None
+
+
+# --- auth baseline detection ---
+
+@patch("core.security_scanner.safe_request")
+def test_detect_auth_context_public_when_baseline_2xx_without_auth_header(mock_request):
+    mock_request.return_value = _resp(status=200)
+    ctx = detect_auth_context(ENDPOINT, "GET", headers=None)
+    assert ctx["endpoint_is_public"] is True
+    assert ctx["baseline_status"] == 200
+
+
+@patch("core.security_scanner.safe_request")
+def test_detect_auth_context_not_public_when_baseline_rejected(mock_request):
+    mock_request.return_value = _resp(status=401)
+    ctx = detect_auth_context(ENDPOINT, "GET")
+    assert ctx["endpoint_is_public"] is False
+    assert ctx["baseline_status"] == 401
+
+
+@patch("core.security_scanner.safe_request")
+def test_detect_auth_context_not_public_when_user_supplies_auth(mock_request):
+    # 2xx with the user's own credentials means auth may well be enforced —
+    # don't call it public.
+    mock_request.return_value = _resp(status=200)
+    ctx = detect_auth_context(ENDPOINT, "GET", headers={"Authorization": "Bearer real"})
+    assert ctx["endpoint_is_public"] is False
+
+
+@patch("core.security_scanner.safe_request")
+def test_detect_auth_context_fires_exactly_one_baseline_request(mock_request):
+    mock_request.return_value = _resp(status=200)
+    detect_auth_context(ENDPOINT, "POST", body={"a": 1})
+    assert mock_request.call_count == 1
+
+
+@patch("core.security_scanner.safe_request")
+def test_auth_tests_do_not_fire_extra_baseline_requests(mock_request):
+    """API2 tests reuse the scan-wide context; only the SSRF checks baseline."""
+    mock_request.return_value = _resp(status=201)
+    test = _auth_test()
+    execute_security_test(test, ENDPOINT, "POST", body={"a": 1},
+                          scan_context={"endpoint_is_public": True, "baseline_status": 201})
+    # repeat defaults to 1 -> exactly one request, no hidden baseline call
+    assert mock_request.call_count == 1
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from core.security_scanner import (
     OWASP_CATEGORIES,
     OWASP_DESCRIPTIONS,
     calculate_risk_score,
+    detect_auth_context,
     execute_security_test,
     generate_security_tests,
 )
@@ -106,19 +107,28 @@ def security_scan(request: Request, payload: ScanRequest) -> Dict[str, Any]:
         wanted = set(payload.categories)
         tests = [t for t in tests if t["owasp_category"].split(" - ")[0] in wanted]
 
+    # One baseline request for the whole scan: does this endpoint enforce auth
+    # at all? Auth findings are "Needs Review" (not Vulnerable) when it doesn't.
+    scan_context = detect_auth_context(endpoint, method, payload.headers, payload.body)
+
     start = time.perf_counter()
     findings = [
         execute_security_test(
-            test, endpoint, method, headers=payload.headers, body=payload.body
+            test, endpoint, method, headers=payload.headers, body=payload.body,
+            scan_context=scan_context,
         )
         for test in tests
     ]
     scan_duration_ms = int((time.perf_counter() - start) * 1000)
 
+    summary = _build_summary(findings)
+    summary["endpoint_is_public"] = scan_context["endpoint_is_public"]
+    summary["baseline_status"] = scan_context["baseline_status"]
+
     response: Dict[str, Any] = {
         "findings": findings,
         "risk_score": calculate_risk_score(findings),
-        "summary": _build_summary(findings),
+        "summary": summary,
         "scan_duration_ms": scan_duration_ms,
     }
 

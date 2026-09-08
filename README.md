@@ -36,7 +36,9 @@ you download runs clean instead of KeyError-ing on a hallucinated field.
 - **Live execution** — run one test or the whole suite against the real API;
   see PASS/FAIL, assertion detail, and response previews.
 - **OWASP API security scanning** — probe the OWASP API Top 10 (2023) with a
-  risk score and exportable Markdown / HTML report.
+  risk score and exportable Markdown / HTML report. Auth findings are
+  auto-suppressed to "Needs Review" on endpoints that require no
+  authentication, so public APIs don't produce false criticals.
 - **Exports** — runnable **pytest** script, **Postman** collection (v2.1), and
   **CI/CD** pipelines for GitHub Actions, GitLab CI, and Azure Pipelines.
 - **History** — every generation and run persists to SQLite; reload, rerun, delete.
