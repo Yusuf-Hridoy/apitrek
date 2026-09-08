@@ -1419,20 +1419,7 @@ document.addEventListener('DOMContentLoaded', () => {
         caseCards = [];
     }
 
-    const PROVIDER_NAMES = { mistral: 'Mistral', groq: 'Groq', github: 'GitHub Models' };
-    const providerBadge = document.getElementById('providerBadge');
     const degradedBanner = document.getElementById('degradedBanner');
-
-    function renderProviderBadge(provider) {
-        if (!providerBadge) return;
-        const name = PROVIDER_NAMES[provider];
-        if (name) {
-            providerBadge.textContent = `Powered by ${name}`;
-            providerBadge.classList.remove('hidden');
-        } else {
-            providerBadge.classList.add('hidden');
-        }
-    }
 
     function renderDegradedBanner(data) {
         if (!degradedBanner) return;
@@ -1467,7 +1454,6 @@ document.addEventListener('DOMContentLoaded', () => {
             legend.innerHTML = '<span class="ground-verified">✓ verified</span> = checked against the real fetched response &middot; <span class="ground-unverified">⚠ unverified</span> = model-generated, confirm before trusting';
             lists.assertions.appendChild(legend);
         }
-        renderProviderBadge(data._provider);
         renderDegradedBanner(data);
         updateResultTabCounts({
             All: positive.length + negative.length + edge.length + assertions.length,
