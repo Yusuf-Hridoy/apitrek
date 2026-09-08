@@ -10,7 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from exports.python_test_generator import generate_pytest_script
 from exports.postman_generator import generate_postman_collection
@@ -23,19 +23,18 @@ class ExportRequest(BaseModel):
     method: str = Field(default="GET", description="HTTP method")
     test_data: Dict[str, Any] = Field(..., description="Generated test case payload")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "endpoint": "https://fakestoreapi.com/products/1",
-                "method": "GET",
-                "test_data": {
-                    "positive_test_cases": [],
-                    "negative_test_cases": [],
-                    "edge_cases": [],
-                    "assertions": [],
-                },
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "endpoint": "https://fakestoreapi.com/products/1",
+            "method": "GET",
+            "test_data": {
+                "positive_test_cases": [],
+                "negative_test_cases": [],
+                "edge_cases": [],
+                "assertions": [],
+            },
         }
+    })
 
 
 @router.post("/export/python")

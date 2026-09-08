@@ -109,5 +109,20 @@ def test_all_generators_return_str():
         assert len(result) > 0
 
 
+def test_cicd_yaml_valid_with_hostile_endpoint():
+    ep = 'https://x.com/a?q="v":#frag'
+    for gen in (generate_github_actions_yaml, generate_gitlab_ci_yaml, generate_azure_pipelines_yaml):
+        out = gen(endpoint=ep, method="GET", test_data=TEST_DATA)
+        yaml.safe_load(out)   # must parse
+
+
+def test_cicd_yaml_valid_with_newline_in_endpoint():
+    ep = "https://x.com/a\ninjected: yes"
+    for gen in (generate_github_actions_yaml, generate_gitlab_ci_yaml, generate_azure_pipelines_yaml):
+        out = gen(endpoint=ep, method="GET", test_data=TEST_DATA)
+        parsed = yaml.safe_load(out)
+        assert isinstance(parsed, dict)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

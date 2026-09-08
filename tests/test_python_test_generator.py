@@ -14,7 +14,7 @@ from exports.python_test_generator import generate_pytest_script
 def test_generate_minimal_script():
     script = generate_pytest_script("https://api.example.com/items", "GET", {})
     assert "import requests" in script
-    assert 'ENDPOINT = "https://api.example.com/items"' in script
+    assert "ENDPOINT = 'https://api.example.com/items'" in script
     assert "def test_endpoint_is_reachable" in script
     assert "assert response.status_code in (200, 201, 204)" in script
 
@@ -128,9 +128,9 @@ def test_generate_with_post_method_and_body():
         ]
     }
     script = generate_pytest_script("https://api.example.com/items", "POST", data)
-    assert 'HTTP_METHOD = "POST"' in script
+    assert "HTTP_METHOD = 'POST'" in script
     assert "_make_request" in script
-    assert '"POST"' in script
+    assert "_make_request('POST', ENDPOINT" in script
 
 
 def test_unique_function_names_for_duplicates():
@@ -174,7 +174,51 @@ def test_malformed_assertions_fallback():
 
 def test_missing_endpoint_fallback():
     script = generate_pytest_script("", "GET", {})
-    assert 'ENDPOINT = "https://example.com/api"' in script
+    assert "ENDPOINT = 'https://example.com/api'" in script
+
+
+# --- hostile-input regression guards (quotes/backslashes/newlines must not
+# produce invalid Python) ---
+
+HOSTILE = {
+    "positive_test_cases": [{"title": 'Get the "active" user', "expected": {"status_code": 200}}],
+    "negative_test_cases": [],
+    "edge_cases": [],
+    "assertions": [
+        {"rule": 'body has field "title"', "category": "schema", "severity": "medium"},
+        {"rule": 'value must equal "O\'Brien"', "category": "schema", "severity": "low"},
+        {"rule": "path uses a backslash \\ and newline\nhere", "category": "schema", "severity": "low"},
+        {"rule": 'triple """quote""" payload', "category": "schema", "severity": "low"},
+    ],
+    "sample_response": {"title": "x"},
+}
+
+
+def test_export_is_valid_python_with_quotes_in_rules():
+    script = generate_pytest_script('https://x.com/a?q="v"', "GET", HOSTILE)
+    ast.parse(script)   # must not raise
+
+
+def test_endpoint_with_quote_is_safe():
+    script = generate_pytest_script('https://x.com/"; import os', "GET",
+                                    {"positive_test_cases": [], "negative_test_cases": [],
+                                     "edge_cases": [], "assertions": []})
+    ast.parse(script)
+
+
+def test_normal_output_unchanged_for_plain_text():
+    """No special chars -> readable output, no ugly over-escaping."""
+    script = generate_pytest_script("https://api.example.com/items", "GET", {
+        "positive_test_cases": [
+            {"id": "TC-1", "title": "Get item 200", "expected": {"status_code": 200}}
+        ],
+        "assertions": [
+            {"rule": "body has field title", "category": "schema", "severity": "medium"}
+        ],
+    })
+    assert '"""TC-1 - Get item 200"""' in script
+    assert '"""[medium] schema: body has field title"""' in script
+    ast.parse(script)
 
 
 if __name__ == "__main__":

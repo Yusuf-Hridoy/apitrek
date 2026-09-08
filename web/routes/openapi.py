@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.openapi_parser import parse_openapi, extract_endpoint_schemas
 from core.contract_tester import (
@@ -31,11 +31,10 @@ class ContractTestsRequest(BaseModel):
 
 
 class ValidateResponseRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     actual_response: Any = Field(..., description="Actual API response payload")
     schema_: Dict[str, Any] = Field(..., alias="schema", description="JSON schema to validate against")
-
-    class Config:
-        populate_by_name = True
 
 
 @router.post("/openapi/parse")

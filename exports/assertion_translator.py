@@ -115,13 +115,16 @@ def pytest_assertions(response: Any, rules: List[str]) -> List[str]:
     # 1) rule-guided refinement — only for real fields
     for rule in rules or []:
         path = _match_rule(rule, fields)
+        # Comments run to end-of-line only: collapse newlines so a multi-line
+        # rule can't inject a line of code into the generated test function.
+        rule_comment = str(rule).replace("\r", " ").replace("\n", " ")
         if not path or path in used:
-            lines.append(f"    # (no matching response field) {rule}")
+            lines.append(f"    # (no matching response field) {rule_comment}")
             continue
         used.add(path)
         a = acc_for(path)
         t = _pytype(fields[path])
-        lines.append(f"    # Validation: {rule}")
+        lines.append(f"    # Validation: {rule_comment}")
         lines.append(f"    assert {a} is not None")
         if t:
             lines.append(f"    assert isinstance({a}, {t})")

@@ -10,6 +10,19 @@ from typing import Any, Dict, List
 from exports.assertion_translator import pytest_assertions
 
 
+def _py_str_literal(value: str) -> str:
+    """Return a safe Python string literal for `value` (handles quotes, backslashes, newlines)."""
+    return repr(str(value))   # repr produces a valid, correctly-escaped Python literal
+
+
+def _safe_docstring(text: str) -> str:
+    """Make `text` safe to place inside a triple-quoted docstring: no stray quotes/backslashes."""
+    # Collapse to a single line and neutralize characters that can break a docstring.
+    s = str(text).replace("\\", "\\\\").replace('"""', "'''").replace('"', "'")
+    s = s.replace("\r", " ").replace("\n", " ").strip()
+    return s
+
+
 def _sanitize_name(name: str) -> str:
     """Convert a title into a valid Python function name."""
     name = re.sub(r"[^\w\s-]", "", name.lower())
@@ -80,17 +93,21 @@ def _generate_case_tests(cases: List[Dict[str, Any]], prefix: str, sample: Any) 
         doc_parts = [p for p in [case_id, title, description] if p]
         docstring = " - ".join(doc_parts)
 
-        test_method = method if method else "HTTP_METHOD"
         json_arg = ""
         request_body = request_info.get("body")
         if request_body is not None:
             json_arg = f", json={json.dumps(request_body)}"
 
+        if method:
+            request_call = f"    response = _make_request({_py_str_literal(method)}, ENDPOINT{json_arg})"
+        else:
+            request_call = f"    response = _make_request(HTTP_METHOD, ENDPOINT{json_arg})"
+
         test_lines = [
             "",
             f"def {name}():",
-            f'    """{docstring}"""',
-            f'    response = _make_request("{test_method}", ENDPOINT{json_arg})',
+            f'    """{_safe_docstring(docstring)}"""',
+            request_call,
         ]
 
         assertion_lines = _build_assertions_for_case(case, sample)
@@ -130,7 +147,7 @@ def _generate_assertion_tests(assertions: List[Dict[str, Any]], sample: Any) -> 
         test_lines = [
             "",
             f"def {name}():",
-            f'    """[{severity}] {category}: {rule}"""',
+            f'    """{_safe_docstring(f"[{severity}] {category}: {rule}")}"""',
             "    response = _make_request(HTTP_METHOD, ENDPOINT)",
         ]
         assertion_lines = pytest_assertions(sample, [rule])
@@ -170,14 +187,14 @@ def generate_pytest_script(endpoint: str, method: str, test_data: Dict[str, Any]
     parts = [
         '"""',
         "Auto-generated pytest API tests",
-        f"Endpoint: {endpoint}",
-        f"Method: {method}",
+        f"Endpoint: {_safe_docstring(endpoint)}",
+        f"Method: {_safe_docstring(method)}",
         '"""',
         "",
         "import requests",
         "",
-        f'ENDPOINT = "{endpoint}"',
-        f'HTTP_METHOD = "{method.upper()}"',
+        f"ENDPOINT = {_py_str_literal(endpoint)}",
+        f"HTTP_METHOD = {_py_str_literal(method.upper())}",
         "",
         _build_request_helper(),
     ]

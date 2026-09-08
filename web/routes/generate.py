@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.generator import generate_test_cases
 from core.live_fetcher import fetch_api_response, LiveFetchError
@@ -73,21 +73,20 @@ class GenerateRequest(BaseModel):
         default=None, description="Optional sample JSON response (manual fallback)"
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "endpoint": "https://fakestoreapi.com/products/1",
-                "method": "GET",
-                "auto_fetch": False,
-                "headers": {},
-                "request_body": {},
-                "sample_response": {
-                    "id": 1,
-                    "title": "test product",
-                    "price": 109.95,
-                },
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "endpoint": "https://fakestoreapi.com/products/1",
+            "method": "GET",
+            "auto_fetch": False,
+            "headers": {},
+            "request_body": {},
+            "sample_response": {
+                "id": 1,
+                "title": "test product",
+                "price": 109.95,
+            },
         }
+    })
 
 
 @router.post("/generate-tests")

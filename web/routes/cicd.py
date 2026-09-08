@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from exports.cicd_generator import (
     generate_github_actions_yaml,
@@ -49,25 +49,24 @@ _GENERATORS = {
 
 
 class CicdExportRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "format": "github",
+            "endpoint": "https://fakestoreapi.com/products/1",
+            "method": "GET",
+            "test_data": {
+                "positive_test_cases": [],
+                "negative_test_cases": [],
+                "edge_cases": [],
+                "assertions": [],
+            },
+        }
+    })
+
     format: str = Field(..., description="CI/CD format: github | gitlab | azure")
     endpoint: str = Field(..., description="API endpoint URL")
     method: str = Field(default="GET", description="HTTP method")
     test_data: Dict[str, Any] = Field(..., description="Generated test case payload")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "format": "github",
-                "endpoint": "https://fakestoreapi.com/products/1",
-                "method": "GET",
-                "test_data": {
-                    "positive_test_cases": [],
-                    "negative_test_cases": [],
-                    "edge_cases": [],
-                    "assertions": [],
-                },
-            }
-        }
 
 
 class CicdExportResponse(BaseModel):

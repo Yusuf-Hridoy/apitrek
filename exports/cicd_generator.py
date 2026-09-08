@@ -18,6 +18,15 @@ TEST_FILE = "test_api.py"
 RESULTS_FILE = "test-results.xml"
 
 
+def _yaml_inline(value: str) -> str:
+    """Safe single-line inline value for embedding in generated YAML."""
+    s = str(value).replace("\r", " ").replace("\n", " ")
+    # neutralize characters that can break an unquoted YAML scalar in our string contexts:
+    # '"' would close a quoted scalar; ': ' (created by the newline collapse or in the
+    # input) would start a nested mapping inside a plain scalar.
+    return s.replace('"', "'").replace(": ", ":").strip()
+
+
 def _count_tests(test_data: Dict[str, Any]) -> int:
     """Count generated test cases for informational pipeline output."""
     total = 0
@@ -67,7 +76,7 @@ env:
 
 jobs:
   api-tests:
-    name: Run API tests ({method} {endpoint})
+    name: Run API tests ({_yaml_inline(method)} {_yaml_inline(endpoint)})
     runs-on: ubuntu-latest
 
     steps:
@@ -133,7 +142,7 @@ api-tests:
   script:
     - |
 {chr(10).join('      ' + line for line in write_step.splitlines())}
-    - echo "Running {test_count} generated test cases for {method} {endpoint}"
+    - echo "Running {test_count} generated test cases for {_yaml_inline(method)} {_yaml_inline(endpoint)}"
     - pytest {TEST_FILE} -v --junitxml={RESULTS_FILE} --cov=. --cov-report=term-missing || true
   coverage: '/TOTAL.*\\s+(\\d+%)$/'
   artifacts:
@@ -198,7 +207,7 @@ steps:
     displayName: "Create test file"
 
   - script: |
-      echo "Running {test_count} generated test cases for {method} {endpoint}"
+      echo "Running {test_count} generated test cases for {_yaml_inline(method)} {_yaml_inline(endpoint)}"
       pytest {TEST_FILE} -v --junitxml={RESULTS_FILE}
     displayName: "Run API tests"
     env:
