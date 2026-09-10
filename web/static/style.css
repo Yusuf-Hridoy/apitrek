@@ -1834,12 +1834,11 @@ button:active:not(:disabled) {
 }
 
 .nav-label {
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
     padding: 0 0.75rem 0.35rem;
-    font-weight: 600;
+    font-weight: 500;
+    font-family: var(--font-display);
 }
 
 .nav-item {
