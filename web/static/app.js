@@ -400,10 +400,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function buildDetailsHtml(result) {
-        let html = `<div class="detail-row"><strong>Status:</strong> expected ${result.expected_status ?? '—'} vs actual ${result.actual_status}</div>`;
+        const verdictClass = result.passed ? 'outcome--pass' : 'outcome--fail';
+        let html = `<div class="outcome ${verdictClass}">
+            <span class="outcome-verdict">${result.passed ? 'Passed' : 'Failed'}</span>
+            <span class="outcome-status">expected ${result.expected_status ?? '—'} &rarr; got ${result.actual_status}</span>
+        </div>`;
+
         if (result.error_message) {
             html += `<div class="detail-row assertion-fail">${escapeHtml(result.error_message)}</div>`;
         }
+
         if (Array.isArray(result.assertion_results) && result.assertion_results.length) {
             html += '<ul class="assertion-list">' + result.assertion_results.map((a) => {
                 // Unverifiable rules (mechanical check impossible) render amber with a
@@ -423,8 +429,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     `${icon} ${escapeHtml(a.assertion)} — ${escapeHtml(a.detail)}</li>`;
             }).join('') + '</ul>';
         }
+
         if (result.actual_response_preview) {
-            html += `<pre class="response-preview">${escapeHtml(result.actual_response_preview)}</pre>`;
+            html += `<details class="response-body">
+                <summary>Response body</summary>
+                <pre class="response-preview">${escapeHtml(result.actual_response_preview)}</pre>
+            </details>`;
         }
         return html;
     }
@@ -1545,19 +1555,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 rulesHtml = `<ul class="case-rules">${validationRules.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>`;
             }
 
+            const descHtml = c.description
+                ? `<details class="case-desc-wrap">
+                       <summary>Description</summary>
+                       <div class="case-desc">${escapeHtml(c.description)}</div>
+                   </details>`
+                : '';
+
             el.innerHTML = `
                 <div class="case-row">
-                    <span class="status-badge pending">Pending</span>
+                    <span class="status-badge pending">PENDING</span>
                     <span class="case-id">${escapeHtml(c.id || '')}</span>
                     <span class="case-title">${escapeHtml(c.title || 'Untitled')}</span>
-                    <span class="case-row-tags">${statusTag}${extraTags}</span>
+                    <span class="case-row-meta">${statusTag}${extraTags}</span>
                     <button type="button" class="btn-run">Run</button>
                     <span class="chevron">&#9662;</span>
                 </div>
                 <div class="case-body hidden">
-                    <div class="case-desc">${escapeHtml(c.description || '')}</div>
-                    ${rulesHtml}
                     <div class="case-details hidden"></div>
+                    ${descHtml}
+                    ${rulesHtml}
                 </div>
             `;
             container.appendChild(el);
