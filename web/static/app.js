@@ -405,10 +405,23 @@ document.addEventListener('DOMContentLoaded', () => {
             html += `<div class="detail-row assertion-fail">${escapeHtml(result.error_message)}</div>`;
         }
         if (Array.isArray(result.assertion_results) && result.assertion_results.length) {
-            html += '<ul class="assertion-list">' + result.assertion_results.map((a) =>
-                `<li class="${a.passed ? 'assertion-pass' : 'assertion-fail'}">` +
-                `${a.passed ? '&#10003;' : '&#10007;'} ${escapeHtml(a.assertion)} — ${escapeHtml(a.detail)}</li>`
-            ).join('') + '</ul>';
+            html += '<ul class="assertion-list">' + result.assertion_results.map((a) => {
+                // Unverifiable rules (mechanical check impossible) render amber with a
+                // distinct icon — never the green ✓ reserved for verified passes.
+                let stateClass, icon;
+                if (a.verifiable === false) {
+                    stateClass = 'assertion-line--unverified';
+                    icon = '&#126;'; // ~
+                } else if (a.passed) {
+                    stateClass = 'assertion-line--verified';
+                    icon = '&#10003;';
+                } else {
+                    stateClass = 'assertion-line--failed';
+                    icon = '&#10007;';
+                }
+                return `<li class="assertion-line ${stateClass}">` +
+                    `${icon} ${escapeHtml(a.assertion)} — ${escapeHtml(a.detail)}</li>`;
+            }).join('') + '</ul>';
         }
         if (result.actual_response_preview) {
             html += `<pre class="response-preview">${escapeHtml(result.actual_response_preview)}</pre>`;

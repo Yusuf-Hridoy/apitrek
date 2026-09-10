@@ -53,13 +53,14 @@ def _first_json_object(data: Any) -> Optional[Dict[str, Any]]:
 
 def _run_assertion_rule(
     rule: str, response_data: Any, status_code: int
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, bool]:
     """
     Evaluate one free-text validation rule as best as mechanically possible.
 
     Understands status-code rules ("status code is 200") and quoted field
     checks ("field 'price' is present", "'id' must be an integer"). Rules that
-    cannot be checked mechanically pass with a note for manual review.
+    cannot be checked mechanically pass with a note for manual review and are
+    flagged verifiable=False so the UI can distinguish them from real passes.
     """
     lowered = rule.lower()
 
@@ -68,7 +69,7 @@ def _run_assertion_rule(
         match = re.search(r"\b(\d{3})\b", rule)
         if match:
             code = int(match.group(1))
-            return status_code == code, f"Expected HTTP {code}, got {status_code}"
+            return status_code == code, f"Expected HTTP {code}, got {status_code}", True
 
     # Quoted field names: "id", 'price'
     fields = re.findall(r"['\"]([A-Za-z_][\w.\-]*)['\"]", rule)
@@ -91,9 +92,9 @@ def _run_assertion_rule(
                         detail += f", expected type {word} (got {type(target[field]).__name__})"
                     break
             details.append(detail)
-        return all_ok, "; ".join(details)
+        return all_ok, "; ".join(details), True
 
-    return True, "Rule not mechanically verifiable — manual review recommended"
+    return True, "Rule not mechanically verifiable — manual review recommended", False
 
 
 def _build_request(
@@ -200,14 +201,17 @@ def execute_test_case(
 
         expected = test_case.get("expected") or {}
         for rule in expected.get("validation_rules") or []:
-            ok, detail = _run_assertion_rule(rule, response_data, actual_status)
-            assertion_results.append({"assertion": rule, "passed": ok, "detail": detail})
+            ok, detail, verifiable = _run_assertion_rule(rule, response_data, actual_status)
+            assertion_results.append({
+                "assertion": rule, "passed": ok, "detail": detail, "verifiable": verifiable,
+            })
 
         # Cases from the assertions list carry their own free-text rule
         if test_case.get("rule"):
-            ok, detail = _run_assertion_rule(test_case["rule"], response_data, actual_status)
+            ok, detail, verifiable = _run_assertion_rule(test_case["rule"], response_data, actual_status)
             assertion_results.append({
                 "assertion": test_case["rule"], "passed": ok, "detail": detail,
+                "verifiable": verifiable,
             })
 
         for mutation in mutations:
