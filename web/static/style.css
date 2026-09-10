@@ -159,9 +159,11 @@ code, pre, .mono, .status-code, .case-id {
 
 .form-group label {
     display: block;
+    font-family: var(--font-display);
     font-weight: 500;
     margin-bottom: 0.375rem;
-    font-size: 0.9375rem;
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
 }
 
 .required {
@@ -177,7 +179,7 @@ code, pre, .mono, .status-code, .case-id {
 .hint-text {
     display: block;
     margin-top: 0.25rem;
-    font-size: 0.8125rem;
+    font-size: var(--fs-xs);
     color: var(--text-secondary);
 }
 
@@ -601,8 +603,9 @@ textarea {
 }
 
 .code-preview {
-    background: #1e293b;
-    color: #e2e8f0;
+    background: var(--bg-inset);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
     font-family: var(--font-mono);
     padding: 16px;
     border-radius: 8px;
@@ -1019,7 +1022,7 @@ textarea {
 
 .ground-legend {
     font-size: 12px;
-    color: var(--text-secondary, #666);
+    color: var(--text-secondary);
     margin: 8px 2px 0;
 }
 
@@ -1193,7 +1196,7 @@ textarea {
     border-radius: 4px;
     font-size: 0.7rem;
     font-weight: 700;
-    color: #fff;
+    color: var(--neutral);
 }
 
 .method-badge-get,
@@ -2102,12 +2105,6 @@ button:active:not(:disabled) {
     padding: 1px 6px;
     border-radius: 4px;
     font-size: 0.85em;
-}
-
-/* Cyan primary button needs dark text in dark mode */
-.dark .btn-primary {
-    color: #04222b;
-    font-weight: 700;
 }
 
 /* Import button: subtle pill (overrides the earlier accent-fill rule) */
