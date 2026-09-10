@@ -833,8 +833,8 @@ textarea {
 }
 
 .owasp-categories {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    display: flex;
+    flex-direction: column;
     gap: 0.5rem;
 }
 
@@ -862,6 +862,11 @@ textarea {
 .owasp-category-item .cat-desc {
     color: var(--text-secondary);
     font-size: 0.75rem;
+}
+
+/* the bare text <span> is a flex item; let it shrink and wrap instead of overflowing */
+.owasp-category-item > span {
+    min-width: 0;
 }
 
 .risk-score-gauge {
@@ -1406,8 +1411,7 @@ textarea {
         flex-wrap: wrap;
     }
 
-    .export-format-cards,
-    .owasp-categories {
+    .export-format-cards {
         grid-template-columns: 1fr;
     }
 
