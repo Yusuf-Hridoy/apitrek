@@ -1759,7 +1759,7 @@ button:active:not(:disabled) {
     height: 38px;
     border-radius: 10px;
     background: linear-gradient(135deg, var(--brand), var(--brand-hover));
-    color: #fff;
+    color: #2a1e08;
     display: flex;
     align-items: center;
     justify-content: center;
