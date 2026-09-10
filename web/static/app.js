@@ -713,9 +713,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const s = data.summary || {};
         scanSummary.innerHTML =
+            `<span class="chip chip--bad">${s.vulnerable_count || 0} vulnerable</span>` +
+            `<span class="chip chip--warn">${s.needs_review_count || 0} needs review</span>` +
             `<span class="chip">${s.total_tests || 0} tests</span>` +
-            `<span class="chip status-vulnerable">${s.vulnerable_count || 0} vulnerable</span>` +
-            `<span class="chip status-review">${s.needs_review_count || 0} needs review</span>` +
             `<span class="chip">Critical: ${s.critical || 0}</span>` +
             `<span class="chip">High: ${s.high || 0}</span>` +
             `<span class="chip">Medium: ${s.medium || 0}</span>` +
@@ -794,7 +794,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 detailHtml += `<div class="assertion-fail">${escapeHtml(f.error_message)}</div>`;
             }
             if (f.actual_response_preview) {
-                detailHtml += `<strong>Response preview:</strong><pre class="response-preview">${escapeHtml(f.actual_response_preview)}</pre>`;
+                detailHtml += `<details class="response-body">
+                    <summary>Response preview</summary>
+                    <pre class="response-preview">${escapeHtml(f.actual_response_preview)}</pre>
+                </details>`;
             }
             detailHtml += `<strong>Remediation:</strong> ${escapeHtml(f.remediation || '')}`;
             detailTd.innerHTML = detailHtml;
