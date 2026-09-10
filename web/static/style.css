@@ -934,6 +934,7 @@ textarea {
     width: 100%;
     border-collapse: collapse;
     font-size: var(--fs-sm);
+    table-layout: fixed;          /* columns follow set widths, not content sprawl */
 }
 
 .findings-table th,
@@ -942,7 +943,15 @@ textarea {
     padding: 8px 10px;
     text-align: left;
     vertical-align: top;
+    overflow-wrap: anywhere;      /* long tokens wrap instead of forcing width */
 }
+
+/* Sensible column widths: severity, OWASP, title (flex), status (wide), details */
+.findings-table col.col-sev    { width: 90px; }
+.findings-table col.col-owasp  { width: 96px; }
+.findings-table col.col-title  { width: auto; }     /* takes remaining space */
+.findings-table col.col-status { width: 34%; }
+.findings-table col.col-act    { width: 92px; }
 
 .findings-table th {
     color: var(--text-muted);
@@ -953,18 +962,6 @@ textarea {
 
 .findings-table tbody tr:hover td {
     background: var(--bg-inset);
-}
-
-/* Title column takes the flexible width; the rest stay compact */
-.findings-table td:first-child,
-.findings-table th:first-child,
-.findings-table td:nth-child(2),
-.findings-table th:nth-child(2),
-.findings-table td:nth-child(4),
-.findings-table th:nth-child(4),
-.findings-table td:nth-child(5),
-.findings-table th:nth-child(5) {
-    white-space: nowrap;
 }
 
 .severity-badge {
