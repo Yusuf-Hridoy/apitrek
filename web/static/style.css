@@ -943,7 +943,8 @@ textarea {
     padding: 8px 10px;
     text-align: left;
     vertical-align: top;
-    overflow-wrap: anywhere;      /* long tokens wrap instead of forcing width */
+    overflow-wrap: break-word;    /* wrap at word boundaries, not mid-character */
+    word-break: normal;
 }
 
 /* Sensible column widths: severity, OWASP, title (flex), status (wide), details */
@@ -952,6 +953,53 @@ textarea {
 .findings-table col.col-title  { width: auto; }     /* takes remaining space */
 .findings-table col.col-status { width: 34%; }
 .findings-table col.col-act    { width: 92px; }
+
+/* Narrow screens: findings become stacked, labeled cards — the fixed table
+   layout would otherwise break words character-by-character to fit. */
+@media (max-width: 640px) {
+    .findings-table,
+    .findings-table thead,
+    .findings-table tbody,
+    .findings-table th,
+    .findings-table td,
+    .findings-table tr {
+        display: block;
+    }
+
+    .findings-table thead {
+        display: none;              /* column headers become per-cell labels */
+    }
+
+    .findings-table tbody tr {
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        margin-bottom: 8px;
+        padding: 8px;
+    }
+
+    .findings-table td {
+        border: none;
+        padding: 4px 2px;
+    }
+
+    .findings-table td::before {
+        content: attr(data-label);
+        font-size: var(--fs-xs);
+        color: var(--text-muted);
+        display: block;
+        margin-bottom: 2px;
+    }
+
+    .findings-table .finding-detail-row td {
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        margin: 0 2px 8px;
+    }
+
+    .findings-table .finding-detail-row td::before {
+        content: none;
+    }
+}
 
 .findings-table th {
     color: var(--text-muted);
@@ -1410,12 +1458,6 @@ textarea {
 
     .export-format-cards {
         grid-template-columns: 1fr;
-    }
-
-    .findings-table {
-        display: block;
-        overflow-x: auto;
-        font-size: 0.75rem;
     }
 
     .openapi-modal {

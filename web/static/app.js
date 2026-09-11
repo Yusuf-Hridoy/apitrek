@@ -774,11 +774,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const tr = document.createElement('tr');
             tr.className = rowCls;
             tr.innerHTML = `
-                <td><span class="severity-badge severity-${(f.severity || '').toLowerCase()}">${escapeHtml(f.severity || '')}</span></td>
-                <td>${escapeHtml(owaspShort)}</td>
-                <td>${escapeHtml(f.title || '')}</td>
-                <td><span class="${statusCls}">Expected <code>${expectedForFinding(f)}</code>, ${gotPart} &rarr; ${escapeHtml(f.finding || '')}</span></td>
-                <td><button type="button" class="expand-btn">Details <span class="chevron">▾</span></button></td>
+                <td data-label="Severity"><span class="severity-badge severity-${(f.severity || '').toLowerCase()}">${escapeHtml(f.severity || '')}</span></td>
+                <td data-label="OWASP">${escapeHtml(owaspShort)}</td>
+                <td data-label="Title">${escapeHtml(f.title || '')}</td>
+                <td data-label="Status"><span class="${statusCls}">Expected <code>${expectedForFinding(f)}</code>, ${gotPart} &rarr; ${escapeHtml(f.finding || '')}</span></td>
+                <td data-label=""><button type="button" class="expand-btn">Details <span class="chevron">▾</span></button></td>
             `;
 
             const detailTr = document.createElement('tr');
