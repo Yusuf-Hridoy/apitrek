@@ -221,6 +221,73 @@ def test_normal_output_unchanged_for_plain_text():
     ast.parse(script)
 
 
+# --- corrective-overhaul regression guards ---
+
+PER_CASE_REQUEST = {
+    "positive_test_cases": [
+        {
+            "id": "TC-POS-01",
+            "title": "Get item 200",
+            "expected": {"status_code": 200},
+        }
+    ],
+    "negative_test_cases": [
+        {
+            "id": "TC-NEG-01",
+            "title": "Missing Authorization header",
+            "expected": {"status_code": 401},
+            "request": {"headers": {"Authorization": "Bearer expired"}},
+        },
+        {
+            "id": "TC-NEG-04",
+            "title": "Non-numeric path parameter",
+            "expected": {"status_code": 400},
+            "request": {"endpoint": "https://api.example.com/items/abc"},
+        },
+    ],
+    "edge_cases": [
+        {
+            "id": "TC-EDGE-01",
+            "title": "Rate limit burst",
+            "expected": {"status_code": [200, 429]},
+        }
+    ],
+}
+
+
+def test_negative_cases_apply_their_own_request():
+    """Negative/edge tests must send the altered URL/headers, not the baseline."""
+    script = generate_pytest_script("https://api.example.com/items/1", "GET", PER_CASE_REQUEST)
+    ast.parse(script)
+    # altered headers are threaded through
+    assert 'headers={"Authorization": "Bearer expired"}' in script
+    # altered URL is used verbatim
+    assert "_make_request(HTTP_METHOD, 'https://api.example.com/items/abc'" in script
+    # positive still hits the baseline constant
+    assert "test_positive_get_item_200" in script
+    pos_section = script.split("# --- Negative Test Cases ---")[0]
+    assert "_make_request(HTTP_METHOD, ENDPOINT)" in pos_section
+
+
+def test_list_status_code_renders_in_check():
+    script = generate_pytest_script("https://api.example.com/items", "GET", PER_CASE_REQUEST)
+    assert "assert response.status_code in (200, 429)" in script
+    assert "== [200, 429]" not in script
+
+
+def test_non_numeric_status_code_never_emits_bare_identifier():
+    """An LLM token like `client_timeout` must not become an undefined name."""
+    data = {
+        "positive_test_cases": [
+            {"id": "TC-1", "title": "Timeout", "expected": {"status_code": "client_timeout"}},
+        ]
+    }
+    script = generate_pytest_script("https://api.example.com/items", "GET", data)
+    ast.parse(script)
+    assert "client_timeout" not in script.split('"""', 2)[-1]  # not in emitted code...
+    assert "assert response.status_code < 500" in script       # ...degraded to safe check
+
+
 if __name__ == "__main__":
     import pytest
 

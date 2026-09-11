@@ -224,6 +224,68 @@ def test_malformed_assertions_fallback():
         assert "request" in item
 
 
+# --- corrective-overhaul regression guards ---
+
+def test_case_request_endpoint_and_headers_are_applied():
+    """Each Postman item must send the case's own URL/headers, not the baseline."""
+    test_data = {
+        "positive_test_cases": [
+            {"id": "TC-POS-01", "title": "Get item", "expected": {"status_code": 200}},
+        ],
+        "negative_test_cases": [
+            {
+                "id": "TC-NEG-01",
+                "title": "Missing Authorization header",
+                "expected": {"status_code": 401},
+                "request": {"headers": {"Authorization": "Bearer expired"}},
+            },
+            {
+                "id": "TC-NEG-04",
+                "title": "Non-numeric path parameter",
+                "expected": {"status_code": 400},
+                "request": {"endpoint": "https://api.example.com/items/abc"},
+            },
+        ],
+    }
+    collection = generate_postman_collection("https://api.example.com/items/1", "GET", test_data)
+    data = json.loads(collection)
+    items = {item["name"].split(" ")[0]: item for item in data["item"]}
+    # positive hits the baseline
+    assert items["TC-POS-01"]["request"]["url"]["raw"] == "https://api.example.com/items/1"
+    assert items["TC-POS-01"]["request"]["header"] == []
+    # negative carries its own header and mutated URL
+    assert items["TC-NEG-01"]["request"]["header"] == [
+        {"key": "Authorization", "value": "Bearer expired", "type": "text"}
+    ]
+    assert items["TC-NEG-04"]["request"]["url"]["raw"] == "https://api.example.com/items/abc"
+
+
+def test_list_status_code_uses_oneOf():
+    test_data = {
+        "edge_cases": [
+            {"id": "TC-EDGE-01", "title": "Rate limit burst", "expected": {"status_code": [200, 429]}},
+        ]
+    }
+    collection = generate_postman_collection("https://api.example.com/items", "GET", test_data)
+    data = json.loads(collection)
+    exec_lines = data["item"][0]["event"][0]["script"]["exec"]
+    assert any("to.be.oneOf([200, 429])" in line for line in exec_lines)
+    assert not any("to.have.status([200" in line for line in exec_lines)
+
+
+def test_non_numeric_status_code_degrades_gracefully():
+    test_data = {
+        "positive_test_cases": [
+            {"id": "TC-1", "title": "Timeout", "expected": {"status_code": "client_timeout"}},
+        ]
+    }
+    collection = generate_postman_collection("https://api.example.com/items", "GET", test_data)
+    data = json.loads(collection)
+    exec_lines = data["item"][0]["event"][0]["script"]["exec"]
+    assert any("below(500)" in line for line in exec_lines)
+    assert not any("client_timeout" in line for line in exec_lines)
+
+
 if __name__ == "__main__":
     import pytest
 
