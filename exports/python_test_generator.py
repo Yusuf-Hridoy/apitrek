@@ -55,13 +55,34 @@ def _build_request_helper() -> str:
 '''
 
 
+def _status_assert_line(status_code: Any) -> str:
+    """Safe status-code assert. Lists become `in (...)`; non-numeric tokens
+    (e.g. an LLM emitting a bare identifier like `client_timeout`) degrade to
+    a generic <500 check instead of a NameError/always-false comparison."""
+    if isinstance(status_code, bool):
+        pass
+    elif isinstance(status_code, int):
+        return f"    assert response.status_code == {status_code}"
+    elif isinstance(status_code, (list, tuple)):
+        allowed = [
+            int(x) for x in status_code
+            if (isinstance(x, int) and not isinstance(x, bool))
+            or (isinstance(x, str) and x.strip().isdigit())
+        ]
+        if allowed:
+            return f"    assert response.status_code in ({', '.join(map(str, allowed))})"
+    elif isinstance(status_code, str) and status_code.strip().isdigit():
+        return f"    assert response.status_code == {int(status_code)}"
+    return "    assert response.status_code < 500  # expected status unspecified"
+
+
 def _build_assertions_for_case(case: Dict[str, Any], sample: Any) -> List[str]:
     """Extract structured assertions from a test case."""
     lines = []
     expected = case.get("expected", {}) or {}
     status_code = expected.get("status_code")
     if status_code is not None:
-        lines.append(f"    assert response.status_code == {status_code}")
+        lines.append(_status_assert_line(status_code))
 
     validation_rules = expected.get("validation_rules")
     if validation_rules:
@@ -69,7 +90,7 @@ def _build_assertions_for_case(case: Dict[str, Any], sample: Any) -> List[str]:
     return lines
 
 
-def _generate_case_tests(cases: List[Dict[str, Any]], prefix: str, sample: Any) -> List[str]:
+def _generate_case_tests(cases: List[Dict[str, Any]], prefix: str, sample: Any, endpoint: str) -> List[str]:
     """Generate test function strings from a list of test cases."""
     tests = []
     seen_names = set()
@@ -78,8 +99,6 @@ def _generate_case_tests(cases: List[Dict[str, Any]], prefix: str, sample: Any) 
         case_id = case.get("id", "")
         title = case.get("title", "Untitled")
         description = case.get("description", "")
-        request_info = case.get("request", {}) or {}
-        method = request_info.get("method")
 
         base_name = _sanitize_name(title)
         name = f"test_{prefix}_{base_name}"
@@ -93,15 +112,30 @@ def _generate_case_tests(cases: List[Dict[str, Any]], prefix: str, sample: Any) 
         doc_parts = [p for p in [case_id, title, description] if p]
         docstring = " - ".join(doc_parts)
 
-        json_arg = ""
-        request_body = request_info.get("body")
-        if request_body is not None:
-            json_arg = f", json={json.dumps(request_body)}"
+        # Each case sends the request its scenario describes: the LLM's
+        # per-case request object wins; baseline ENDPOINT/HTTP_METHOD only
+        # fill in fields the case leaves unset. This is what makes
+        # "missing/malformed Authorization header" and "non-numeric path"
+        # tests actually differ from the positive baseline.
+        req = case.get("request", {}) or {}
+        ep = req.get("endpoint")
+        url_expr = "ENDPOINT"
+        if ep and ep != endpoint:
+            url_expr = _py_str_literal(ep)
 
-        if method:
-            request_call = f"    response = _make_request({_py_str_literal(method)}, ENDPOINT{json_arg})"
-        else:
-            request_call = f"    response = _make_request(HTTP_METHOD, ENDPOINT{json_arg})"
+        method = req.get("method")
+        method_expr = _py_str_literal(method) if method else "HTTP_METHOD"
+
+        kwargs = []
+        body = req.get("body")
+        if body is not None:
+            kwargs.append(f"json={json.dumps(body)}")
+        headers = req.get("headers")
+        if isinstance(headers, dict) and headers:
+            kwargs.append(f"headers={json.dumps(headers)}")
+        kwarg_str = (", " + ", ".join(kwargs)) if kwargs else ""
+
+        request_call = f"    response = _make_request({method_expr}, {url_expr}{kwarg_str})"
 
         test_lines = [
             "",
@@ -201,15 +235,15 @@ def generate_pytest_script(endpoint: str, method: str, test_data: Dict[str, Any]
 
     if positive_cases:
         parts.append("\n# --- Positive Test Cases ---")
-        parts.extend(_generate_case_tests(positive_cases, "positive", sample))
+        parts.extend(_generate_case_tests(positive_cases, "positive", sample, endpoint))
 
     if negative_cases:
         parts.append("\n# --- Negative Test Cases ---")
-        parts.extend(_generate_case_tests(negative_cases, "negative", sample))
+        parts.extend(_generate_case_tests(negative_cases, "negative", sample, endpoint))
 
     if edge_cases:
         parts.append("\n# --- Edge Cases ---")
-        parts.extend(_generate_case_tests(edge_cases, "edge", sample))
+        parts.extend(_generate_case_tests(edge_cases, "edge", sample, endpoint))
 
     if assertions:
         parts.append("\n# --- Assertions ---")

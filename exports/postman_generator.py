@@ -55,15 +55,47 @@ def _build_body(body: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _allowed_statuses(status_code: Any) -> Optional[List[int]]:
+    """Normalize an expected status_code (int / digit-str / list of those) to a
+    list of ints, or None when it isn't a concrete status (so callers emit a
+    generic check instead of invalid JS like pm.response.to.have.status([200]))."""
+    if isinstance(status_code, bool):
+        return None
+    if isinstance(status_code, int):
+        return [status_code]
+    if isinstance(status_code, str) and status_code.strip().isdigit():
+        return [int(status_code)]
+    if isinstance(status_code, (list, tuple)):
+        allowed = [
+            int(x) for x in status_code
+            if (isinstance(x, int) and not isinstance(x, bool))
+            or (isinstance(x, str) and x.strip().isdigit())
+        ]
+        return allowed or None
+    return None
+
+
 def _build_test_script(expected: Dict[str, Any], sample: Any) -> List[str]:
     """Generate Postman test-script lines from expected assertions."""
     lines: List[str] = []
     status_code = expected.get("status_code")
     if status_code is not None:
-        lines.append(f'pm.test("Status code is {status_code}", function () {{')
-        lines.append(f"    pm.response.to.have.status({status_code});")
-        lines.append("});")
-        lines.append("")
+        allowed = _allowed_statuses(status_code)
+        if allowed and len(allowed) == 1:
+            lines.append(f'pm.test("Status code is {allowed[0]}", function () {{')
+            lines.append(f"    pm.response.to.have.status({allowed[0]});")
+            lines.append("});")
+            lines.append("")
+        elif allowed:
+            lines.append(f'pm.test("Status code is one of {allowed}", function () {{')
+            lines.append(f"    pm.expect(pm.response.code).to.be.oneOf({json.dumps(allowed)});")
+            lines.append("});")
+            lines.append("")
+        else:
+            lines.append('pm.test("Status code is not a server error", function () {')
+            lines.append("    pm.expect(pm.response.code).to.be.below(500);")
+            lines.append("});")
+            lines.append("")
 
     validation_rules = expected.get("validation_rules")
     if validation_rules:
@@ -85,7 +117,10 @@ def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method
 
     request_info = case.get("request", {}) or {}
     method = (request_info.get("method") or default_method).upper()
-    endpoint = default_endpoint
+    # Each case sends the request its scenario describes: per-case endpoint,
+    # headers, and body from the LLM's request object; baseline only as fallback.
+    endpoint = request_info.get("endpoint") or default_endpoint
+    request_headers = request_info.get("headers")
     request_body = request_info.get("body")
 
     expected = case.get("expected", {}) or {}
@@ -95,7 +130,7 @@ def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method
         "name": f"{case_id} - {title}" if case_id else title,
         "request": {
             "method": method,
-            "header": [],
+            "header": _build_headers(request_headers) if isinstance(request_headers, dict) else [],
             "url": _parse_url(endpoint),
             "description": description,
         },
