@@ -953,12 +953,12 @@ textarea {
     word-break: normal;
 }
 
-/* Sensible column widths: severity, OWASP, title (flex), status (wide), details */
-.findings-table col.col-sev    { width: 90px; }
-.findings-table col.col-owasp  { width: 96px; }
-.findings-table col.col-title  { width: auto; }     /* takes remaining space */
-.findings-table col.col-status { width: 34%; }
-.findings-table col.col-act    { width: 92px; }
+/* Sensible column widths: title gets the flexible share, status wraps in the rest */
+.findings-table col.col-sev    { width: 84px; }
+.findings-table col.col-owasp  { width: 90px; }
+.findings-table col.col-title  { width: 42%; }
+.findings-table col.col-status { width: auto; }
+.findings-table col.col-act    { width: 86px; }
 
 /* Narrow screens: findings become stacked, labeled cards — the fixed table
    layout would otherwise break words character-by-character to fit. */
