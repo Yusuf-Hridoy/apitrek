@@ -967,10 +967,15 @@ textarea {
 .findings-table col.col-status { width: auto; }
 .findings-table col.col-act    { width: 62px; }
 
-/* Status chips stay intact but wrap as units between each other */
+/* Status chips wrap inside the column — long prose chips (e.g. "no stack
+   traces / secrets", "Missing headers: ...") would overflow with nowrap */
 .findings-table td:nth-child(4) code {
-    white-space: nowrap;
     display: inline-block;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: normal;
+    vertical-align: top;
 }
 .findings-table td:nth-child(4) {
     line-height: 1.5;
