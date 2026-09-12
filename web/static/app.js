@@ -704,6 +704,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function severityCounts(findings) {
+        /* Canonical per-severity counts — the ONLY source for both the summary
+           chips and the filter-tab badges, so the two can never disagree. */
+        const counts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
+        (findings || []).forEach((f) => {
+            if (counts[f.severity] !== undefined) counts[f.severity] += 1;
+        });
+        return counts;
+    }
+
     function renderScanResults(data) {
         const band = riskBand(data.risk_score || 0);
         riskScoreFill.style.width = `${data.risk_score || 0}%`;
@@ -712,14 +722,15 @@ document.addEventListener('DOMContentLoaded', () => {
         renderRiskContextNote(data);
 
         const s = data.summary || {};
+        const sev = severityCounts(data.findings);
         scanSummary.innerHTML =
             `<span class="chip chip--bad">${s.vulnerable_count || 0} vulnerable</span>` +
             `<span class="chip chip--warn">${s.needs_review_count || 0} needs review</span>` +
             `<span class="chip">${s.total_tests || 0} tests</span>` +
-            `<span class="chip">Critical: ${s.critical || 0}</span>` +
-            `<span class="chip">High: ${s.high || 0}</span>` +
-            `<span class="chip">Medium: ${s.medium || 0}</span>` +
-            `<span class="chip">Low: ${s.low || 0}</span>` +
+            `<span class="chip">Critical: ${sev.Critical}</span>` +
+            `<span class="chip">High: ${sev.High}</span>` +
+            `<span class="chip">Medium: ${sev.Medium}</span>` +
+            `<span class="chip">Low: ${sev.Low}</span>` +
             `<span class="chip">${((data.scan_duration_ms || 0) / 1000).toFixed(1)}s</span>`;
 
         activeSeverity = 'all';
@@ -814,8 +825,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateSeverityTabCounts() {
         const findings = (lastScan && lastScan.findings) || [];
-        const by = { Critical: 0, High: 0, Medium: 0, Low: 0 };
-        findings.forEach((f) => { if (by[f.severity] !== undefined) by[f.severity]++; });
+        const by = severityCounts(findings);
         const set = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = n; };
         set('sevcAll', findings.length);
         set('sevcCritical', by.Critical);
