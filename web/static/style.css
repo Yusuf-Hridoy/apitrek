@@ -976,8 +976,16 @@ textarea {
     line-height: 1.5;
 }
 
-/* Narrow screens: findings become stacked, labeled cards — column min-widths
-   must be released so the cards fill the narrow viewport. */
+/* In-panel scan status: loading skeletons while a scan runs, error text on failure */
+.scan-error {
+    color: var(--bad);
+    background: var(--bad-subtle);
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-sm);
+}
+
+/* Narrow screens: findings become stacked, labeled cards. */
 @media (max-width: 640px) {
     .findings-table,
     .findings-table thead,

@@ -212,9 +212,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 // one-click sample select all if the user hasn't picked any.
                 const boxes = owaspCategoriesEl.querySelectorAll('input[type="checkbox"]');
                 if (boxes.length && !selectedCategories().length) {
-                    boxes.forEach((cb) => { cb.checked = true; });
+                    boxes.forEach((cb) => {
+                        cb.checked = true;
+                        cb.dispatchEvent(new Event('change', { bubbles: true }));  // sync any derived state
+                    });
                 }
-                runScanBtn.click();  // single scan code path — no duplicate fetch
+                // Defer so the checked state is committed before the scan reads
+                // selectedCategories() — a same-tick click can read stale boxes.
+                setTimeout(() => runScanBtn.click(), 0);  // single scan code path — no duplicate fetch
             } else if (form.requestSubmit) {
                 form.requestSubmit();
             } else {
@@ -577,6 +582,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const riskContextNote = document.getElementById('riskContextNote');
     const scanSummary = document.getElementById('scanSummary');
     const findingsBody = document.getElementById('findingsBody');
+    const securityScanLoading = document.getElementById('securityScanLoading');
+    const securityScanError = document.getElementById('securityScanError');
     const exportSecMdBtn = document.getElementById('exportSecMdBtn');
     const exportSecHtmlBtn = document.getElementById('exportSecHtmlBtn');
 
@@ -715,6 +722,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderScanResults(data) {
+        if (securityScanLoading) securityScanLoading.classList.add('hidden');
+        if (securityScanError) securityScanError.classList.add('hidden');
         const band = riskBand(data.risk_score || 0);
         riskScoreFill.style.width = `${data.risk_score || 0}%`;
         riskScoreFill.className = `risk-score-fill ${band.cls}`;
@@ -870,6 +879,16 @@ document.addEventListener('DOMContentLoaded', () => {
         runScanBtn.querySelector('.btn-text').textContent = 'Scanning...';
         runScanBtn.querySelector('.spinner').classList.remove('hidden');
 
+        // Mirror the functional tab: the Results panel reacts as soon as the
+        // scan starts (loading skeletons), so the button never feels dead.
+        // On failure the error is shown inside the panel, not only as a toast.
+        emptyState.classList.add('hidden');
+        resultsSkeleton.classList.add('hidden');
+        resultsSection.classList.add('hidden');
+        securityResults.classList.remove('hidden');
+        if (securityScanError) securityScanError.classList.add('hidden');
+        if (securityScanLoading) securityScanLoading.classList.remove('hidden');
+
         try {
             const res = await fetch('/api/security/scan', {
                 method: 'POST',
@@ -885,7 +904,13 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                showError(data.detail || `Scan failed (${res.status})`);
+                const msg = data.detail || `Scan failed (${res.status})`;
+                if (securityScanLoading) securityScanLoading.classList.add('hidden');
+                if (securityScanError) {
+                    securityScanError.textContent = msg;
+                    securityScanError.classList.remove('hidden');
+                }
+                showError(msg);
                 return;
             }
             lastScan = data;
@@ -895,7 +920,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 'success'
             );
         } catch (err) {
-            showError('Scan failed. Please make sure the server is running.');
+            const msg = 'Scan failed. Please make sure the server is running.';
+            if (securityScanLoading) securityScanLoading.classList.add('hidden');
+            if (securityScanError) {
+                securityScanError.textContent = msg;
+                securityScanError.classList.remove('hidden');
+            }
+            showError(msg);
         } finally {
             runScanBtn.disabled = false;
             runScanBtn.querySelector('.btn-text').textContent = 'Run Security Scan';
