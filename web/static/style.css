@@ -938,38 +938,34 @@ textarea {
 
 .findings-table {
     width: 100%;
+    min-width: 420px;             /* below this the wrap scrolls rather than crushing columns */
     border-collapse: collapse;
     font-size: var(--fs-sm);
-    table-layout: auto;           /* min-widths enforce floors; browser shares the rest */
+    table-layout: fixed;          /* columns fit the panel exactly, no overflow */
 }
 
-.findings-table-wrap { overflow-x: auto; }   /* last-resort scroll if min-widths exceed the panel */
+.findings-table-wrap { overflow-x: auto; }   /* last-resort scroll only when the panel is < min-width */
 
 .findings-table th,
 .findings-table td {
     border-bottom: 1px solid var(--border-color);
-    padding: 8px 10px;
+    padding: 8px 6px;
     text-align: left;
     vertical-align: top;
     overflow-wrap: break-word;    /* wrap at word boundaries, not mid-character */
     word-break: normal;
 }
 
-/* Min-widths guarantee no column collapses; the browser shares remaining space.
-   Title and Status are the two that must never be crushed. col min-width
-   support is inconsistent, so the cells below enforce the floors for real. */
-.findings-table col.col-sev    { width: 88px; }
-.findings-table col.col-owasp  { width: 92px; }
-.findings-table col.col-title  { min-width: 220px; }
-.findings-table col.col-status { min-width: 240px; }
-.findings-table col.col-act    { width: 92px; }
-
-/* Per-column cell floors (columns in order: Severity, OWASP, Title, Status, Details) */
-.findings-table td:nth-child(1), .findings-table th:nth-child(1) { min-width: 84px; }
-.findings-table td:nth-child(2), .findings-table th:nth-child(2) { min-width: 88px; }
-.findings-table td:nth-child(3), .findings-table th:nth-child(3) { min-width: 200px; }  /* Title */
-.findings-table td:nth-child(4), .findings-table th:nth-child(4) { min-width: 230px; }  /* Status */
-.findings-table td:nth-child(5), .findings-table th:nth-child(5) { min-width: 84px; }
+/* Compact fixed columns sized to their real content minimums ("Critical"
+   badge and "API10:2023" token must fit whole); Title takes a proportional
+   share and Status gets the rest — both wrap to 2-3 lines at normal panel
+   widths instead of scrolling or shattering. */
+.findings-table .severity-badge { padding: 2px 7px; }   /* trim so the badge fits its column */
+.findings-table col.col-sev    { width: 76px; }
+.findings-table col.col-owasp  { width: 78px; }
+.findings-table col.col-title  { width: 30%; }
+.findings-table col.col-status { width: auto; }
+.findings-table col.col-act    { width: 62px; }
 
 /* Status chips stay intact but wrap as units between each other */
 .findings-table td:nth-child(4) code {
@@ -992,9 +988,8 @@ textarea {
         display: block;
     }
 
-    .findings-table td:nth-child(n),
-    .findings-table th:nth-child(n) {
-        min-width: 0;               /* stacked cards fill the viewport, no floors */
+    .findings-table {
+        min-width: 0;               /* stacked cards fill the narrow viewport */
     }
 
     .findings-table thead {
