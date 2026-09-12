@@ -940,8 +940,10 @@ textarea {
     width: 100%;
     border-collapse: collapse;
     font-size: var(--fs-sm);
-    table-layout: fixed;          /* columns follow set widths, not content sprawl */
+    table-layout: auto;           /* min-widths enforce floors; browser shares the rest */
 }
+
+.findings-table-wrap { overflow-x: auto; }   /* last-resort scroll if min-widths exceed the panel */
 
 .findings-table th,
 .findings-table td {
@@ -953,15 +955,33 @@ textarea {
     word-break: normal;
 }
 
-/* Sensible column widths: title gets the flexible share, status wraps in the rest */
-.findings-table col.col-sev    { width: 84px; }
-.findings-table col.col-owasp  { width: 90px; }
-.findings-table col.col-title  { width: 42%; }
-.findings-table col.col-status { width: auto; }
-.findings-table col.col-act    { width: 86px; }
+/* Min-widths guarantee no column collapses; the browser shares remaining space.
+   Title and Status are the two that must never be crushed. col min-width
+   support is inconsistent, so the cells below enforce the floors for real. */
+.findings-table col.col-sev    { width: 88px; }
+.findings-table col.col-owasp  { width: 92px; }
+.findings-table col.col-title  { min-width: 220px; }
+.findings-table col.col-status { min-width: 240px; }
+.findings-table col.col-act    { width: 92px; }
 
-/* Narrow screens: findings become stacked, labeled cards — the fixed table
-   layout would otherwise break words character-by-character to fit. */
+/* Per-column cell floors (columns in order: Severity, OWASP, Title, Status, Details) */
+.findings-table td:nth-child(1), .findings-table th:nth-child(1) { min-width: 84px; }
+.findings-table td:nth-child(2), .findings-table th:nth-child(2) { min-width: 88px; }
+.findings-table td:nth-child(3), .findings-table th:nth-child(3) { min-width: 200px; }  /* Title */
+.findings-table td:nth-child(4), .findings-table th:nth-child(4) { min-width: 230px; }  /* Status */
+.findings-table td:nth-child(5), .findings-table th:nth-child(5) { min-width: 84px; }
+
+/* Status chips stay intact but wrap as units between each other */
+.findings-table td:nth-child(4) code {
+    white-space: nowrap;
+    display: inline-block;
+}
+.findings-table td:nth-child(4) {
+    line-height: 1.5;
+}
+
+/* Narrow screens: findings become stacked, labeled cards — column min-widths
+   must be released so the cards fill the narrow viewport. */
 @media (max-width: 640px) {
     .findings-table,
     .findings-table thead,
@@ -970,6 +990,11 @@ textarea {
     .findings-table td,
     .findings-table tr {
         display: block;
+    }
+
+    .findings-table td:nth-child(n),
+    .findings-table th:nth-child(n) {
+        min-width: 0;               /* stacked cards fill the viewport, no floors */
     }
 
     .findings-table thead {
