@@ -161,14 +161,26 @@ def _build_assertion_item(assertion: Dict[str, Any], endpoint: str, method: str,
     severity = assertion.get("severity", "medium")
 
     assertion_lines = postman_assertions(sample, [rule])
-    script_lines = [
-        f'pm.test({json.dumps(f"[{severity}] {category}: {rule}")}, function () {{',
-    ]
-    if assertion_lines:
+    # The translator's generic <500 fallback (emitted when the sample response
+    # has no schema to check against) is the same fake-pass pattern as a
+    # fabricated oneOf/200 — only real field checks count as groundable.
+    schema_sample = isinstance(sample, (dict, list))
+    if assertion.get("grounded", True) and schema_sample and assertion_lines:
+        script_lines = [
+            f'pm.test({json.dumps(f"[{severity}] {category}: {rule}")}, function () {{',
+        ]
         script_lines.extend(assertion_lines)
+        script_lines.append("});")
     else:
-        script_lines.append("    pm.expect(pm.response.code).to.be.below(500);")
-    script_lines.append("});")
+        # Not mechanically verifiable against the sample response — marked
+        # manual-review instead of fabricating a pass on the baseline request.
+        script_lines = [
+            f'pm.test.skip({json.dumps(f"[MANUAL] [{severity}] {category}: {rule}")}, function () {{',
+            "    // Not mechanically verifiable from the sample response —",
+            "    // verify manually or supply a scenario request.",
+            "    // (Marked unverified in Apitrek.)",
+            "});",
+        ]
 
     return {
         "name": f"[{severity}] {rule}",

@@ -178,17 +178,27 @@ def _generate_assertion_tests(assertions: List[Dict[str, Any]], sample: Any) -> 
             name = f"{name}_{counter}"
         seen_names.add(name)
 
-        test_lines = [
-            "",
-            f"def {name}():",
-            f'    """{_safe_docstring(f"[{severity}] {category}: {rule}")}"""',
-            "    response = _make_request(HTTP_METHOD, ENDPOINT)",
-        ]
         assertion_lines = pytest_assertions(sample, [rule])
-        if _has_real_assert(assertion_lines):
+        if assertion.get("grounded", True) and _has_real_assert(assertion_lines):
+            test_lines = [
+                "",
+                f"def {name}():",
+                f'    """{_safe_docstring(f"[{severity}] {category}: {rule}")}"""',
+                "    response = _make_request(HTTP_METHOD, ENDPOINT)",
+            ]
             test_lines.extend(assertion_lines)
         else:
-            test_lines.append("    assert response.status_code == 200  # adjust as needed")
+            test_lines = [
+                "",
+                "@pytest.mark.skip(reason=\"Not mechanically verifiable from the sample "
+                "response — requires a scenario-specific request or manual review.\")",
+                f"def {name}():",
+                f'    """{_safe_docstring(f"[{severity}] {category}: {rule}")}"""',
+                "    # This assertion describes a condition that cannot be confirmed",
+                "    # against a single baseline response. Verify manually or supply",
+                "    # a scenario request. (Marked unverified in Apitrek.)",
+                "    pass",
+            ]
         tests.append("\n".join(test_lines))
 
     return tests
@@ -226,6 +236,7 @@ def generate_pytest_script(endpoint: str, method: str, test_data: Dict[str, Any]
         '"""',
         "",
         "import requests",
+        "import pytest",
         "",
         f"ENDPOINT = {_py_str_literal(endpoint)}",
         f"HTTP_METHOD = {_py_str_literal(method.upper())}",

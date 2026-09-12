@@ -288,6 +288,54 @@ def test_non_numeric_status_code_never_emits_bare_identifier():
     assert "assert response.status_code < 500" in script       # ...degraded to safe check
 
 
+# --- honest assertion-test regression guards ---
+
+def test_ungroundable_assertion_is_skipped_not_faked():
+    """Ungroundable rules must not emit a fake passing baseline assert."""
+    td = {
+        "positive_test_cases": [],
+        "negative_test_cases": [],
+        "edge_cases": [],
+        "assertions": [
+            {"rule": "Malformed Authorization header must not expose internal errors",
+             "category": "security", "severity": "critical", "grounded": False},
+            {"rule": 'body has field "id"', "category": "schema", "severity": "low", "grounded": True},
+        ],
+        "sample_response": {"id": 1, "title": "x"},
+    }
+    s = generate_pytest_script("https://x.com/a", "GET", td)
+    ast.parse(s)                                    # valid python
+    assert "@pytest.mark.skip" in s                 # ungroundable -> skipped
+    assert "status_code == 200  # adjust" not in s  # no fake pass
+    assert 'data["id"]' in s                        # groundable -> real check
+    assert "import pytest" in s                     # skip decorator is valid
+
+
+def test_skipped_assertion_test_collects():
+    """A skipped test must still be collectable by pytest."""
+    import subprocess
+    import sys
+    import tempfile
+    import textwrap
+
+    td = {
+        "assertions": [
+            {"rule": "Malformed Authorization header must not expose internal errors",
+             "category": "security", "severity": "critical", "grounded": False},
+        ],
+    }
+    s = generate_pytest_script("https://x.com/a", "GET", td)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "test_gen.py"
+        path.write_text(textwrap.dedent(s))
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q", str(path)],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "test_assertion_malformed_authorization" in result.stdout
+
+
 if __name__ == "__main__":
     import pytest
 

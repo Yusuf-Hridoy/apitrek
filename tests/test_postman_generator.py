@@ -286,6 +286,34 @@ def test_non_numeric_status_code_degrades_gracefully():
     assert not any("client_timeout" in line for line in exec_lines)
 
 
+# --- honest assertion-test regression guards ---
+
+def test_ungroundable_assertion_is_skipped_not_faked():
+    """Ungroundable rules must be marked manual/skipped, never a fabricated pass."""
+    test_data = {
+        "assertions": [
+            {"rule": "Malformed Authorization header must not expose internal errors",
+             "category": "security", "severity": "critical", "grounded": False},
+            {"rule": 'body has field "id"', "category": "schema", "severity": "low", "grounded": True},
+        ],
+        "sample_response": {"id": 1, "title": "x"},
+    }
+    collection = generate_postman_collection("https://x.com/a", "GET", test_data)
+    data = json.loads(collection)
+    items = data["item"]
+    assert len(items) == 2
+    # ungroundable -> skipped/manual-marked
+    ungrounded_lines = items[0]["event"][0]["script"]["exec"]
+    assert any("pm.test.skip" in line and "[MANUAL]" in line for line in ungrounded_lines)
+    assert not any("pm.expect(pm.response.code)" in line for line in ungrounded_lines)
+    # still a real request item (groundable path untouched below)
+    assert "request" in items[0]
+    # groundable -> real pm.expect checks
+    grounded_text = "\n".join(items[1]["event"][0]["script"]["exec"])
+    assert 'pm.expect(jsonData["id"])' in grounded_text
+    assert "pm.test.skip" not in grounded_text
+
+
 if __name__ == "__main__":
     import pytest
 
