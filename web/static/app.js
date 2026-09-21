@@ -827,8 +827,9 @@ document.addEventListener('DOMContentLoaded', () => {
             : findings.filter((f) => f.finding === 'Vulnerable').length;
         const reviewCount = s.needs_review_count || 0;
         const totalFindings = s.total_tests || findings.length;
+        const decidedCount = secureCount + vulnerableCount;
         let scanSentence =
-            `${secureCount} of ${totalFindings} findings reached a definite verdict (secure or vulnerable).`;
+            `${decidedCount} of ${totalFindings} findings reached a definite verdict (secure or vulnerable).`;
         if (reviewCount) scanSentence += ` ${reviewCount} couldn't be auto-determined — review those manually.`;
         renderScorecard(
             scorecardSlot(securityResults, 'scanScorecard', securityResults.querySelector(':scope > h2')),
