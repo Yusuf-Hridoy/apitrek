@@ -23,6 +23,87 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastSessionId = null;
     let caseCards = [];
 
+    // --- Honest coverage scorecard (shared by functional + security views) ---
+    // coverage === null renders the neutral "not run yet" state — never a
+    // misleading 0%/100% before anything has executed.
+    function renderScorecard(container, { coverage, verified, needsReview, failed, total, sentence }) {
+        const pct = (coverage === null || coverage === undefined) ? null : Math.round(coverage);
+        const pills = pct === null
+            ? `<span class="pill pill--neutral">Not run yet</span>` +
+              `<span class="pill pill--neutral">${total} assertions</span>`
+            : `<span class="pill pill--ok">${verified} verified</span>` +
+              `<span class="pill pill--warn">${needsReview} needs review</span>` +
+              `<span class="pill pill--bad">${failed} failed</span>` +
+              `<span class="pill pill--neutral">${total} total</span>`;
+        container.innerHTML = `
+            <div class="scorecard${pct === null ? ' scorecard--pending' : ''}">
+                <div class="scorecard-ring" style="${pct === null ? 'background:var(--bg-inset)' : `--pct:${pct}`}">
+                    <span class="scorecard-pct">${pct === null ? '&mdash;' : pct + '%'}</span>
+                    <span class="scorecard-pct-label">coverage</span>
+                </div>
+                <div class="scorecard-body">
+                    <div class="scorecard-pills">${pills}</div>
+                    <p class="scorecard-note">${escapeHtml(sentence)}</p>
+                </div>
+            </div>`;
+    }
+
+    // Lazily create the scorecard slot inside a results panel (keeps
+    // index.html untouched); afterEl inserts below a heading instead of first.
+    function scorecardSlot(parent, id, afterEl) {
+        let el = document.getElementById(id);
+        if (!el) {
+            el = document.createElement('div');
+            el.id = id;
+            parent.insertBefore(el, afterEl ? afterEl.nextSibling : parent.firstChild);
+        }
+        return el;
+    }
+
+    function countGeneratedAssertions(data) {
+        if (!data) return 0;
+        let n = (data.assertions || []).length;
+        ['positive_test_cases', 'negative_test_cases', 'edge_cases'].forEach((key) => {
+            (data[key] || []).forEach((c) => {
+                n += ((c.expected && c.expected.validation_rules) || []).length;
+            });
+        });
+        return n;
+    }
+
+    // Re-tally executed assertions across all run case cards and refresh the
+    // functional scorecard. Before any run it shows the not-run state.
+    function refreshFunctionalScorecard() {
+        const slot = scorecardSlot(resultsSection, 'scorecard');
+        let verified = 0, needsReview = 0, failed = 0, total = 0;
+        caseCards.forEach((entry) => {
+            if (!entry.execResult) return;
+            (entry.execResult.assertion_results || []).forEach((a) => {
+                total += 1;
+                if (a.verifiable === false) needsReview += 1;
+                else if (a.passed) verified += 1;
+                else failed += 1;
+            });
+        });
+        const ran = caseCards.some((entry) => entry.execResult);
+        let sentence;
+        if (!ran) {
+            sentence = 'Not run yet — run the tests to see how much can be verified against the real response.';
+        } else {
+            sentence = total
+                ? `${verified} of ${total} assertions were checked against the real response.`
+                : 'The run produced no checkable assertions.';
+            if (needsReview) sentence += ` ${needsReview} couldn't be auto-verified — review those manually.`;
+            if (failed) sentence += ` ${failed} failed against the live API.`;
+        }
+        renderScorecard(slot, {
+            coverage: ran ? (total ? (100 * verified) / total : 0) : null,
+            verified, needsReview, failed,
+            total: ran ? total : countGeneratedAssertions(lastResult),
+            sentence,
+        });
+    }
+
     // Trigger a browser download for a Blob.
     function triggerDownload(blob, filename) {
         const url = window.URL.createObjectURL(blob);
@@ -445,6 +526,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function applyExecutionResult(entry, result) {
+        entry.execResult = result;
         entry.el.classList.remove('test-pass', 'test-fail');
         entry.el.classList.add(result.passed ? 'test-pass' : 'test-fail');
 
@@ -491,6 +573,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const result = await executeOne(entry);
             applyExecutionResult(entry, result);
+            refreshFunctionalScorecard();
             validateContract(result);
         } catch (err) {
             showError(err.message || 'Execution failed. Is the server running?');
@@ -546,6 +629,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         executionProgressFill.style.width = '100%';
         executionProgressText.textContent = 'Done';
+        refreshFunctionalScorecard();
         if (lastExecution) validateContract(lastExecution);
         const rate = total ? Math.round((passed / total) * 100) : 0;
         executionSummary.innerHTML =
@@ -732,6 +816,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const s = data.summary || {};
         const sev = severityCounts(data.findings);
+
+        // Honest coverage scorecard above the summary chips: coverage = the
+        // share of findings that reached a definite verdict (Secure or
+        // Vulnerable); "Needs Review" is the un-covered remainder.
+        const findings = data.findings || [];
+        const secureCount = findings.filter((f) => f.finding === 'Secure').length;
+        const vulnerableCount = s.vulnerable_count !== undefined
+            ? s.vulnerable_count
+            : findings.filter((f) => f.finding === 'Vulnerable').length;
+        const reviewCount = s.needs_review_count || 0;
+        const totalFindings = s.total_tests || findings.length;
+        let scanSentence =
+            `${secureCount} of ${totalFindings} findings reached a definite verdict (secure or vulnerable).`;
+        if (reviewCount) scanSentence += ` ${reviewCount} couldn't be auto-determined — review those manually.`;
+        renderScorecard(
+            scorecardSlot(securityResults, 'scanScorecard', securityResults.querySelector(':scope > h2')),
+            {
+                coverage: totalFindings ? (100 * (secureCount + vulnerableCount)) / totalFindings : 0,
+                verified: secureCount,
+                needsReview: reviewCount,
+                failed: vulnerableCount,
+                total: totalFindings,
+                sentence: scanSentence,
+            }
+        );
+
         scanSummary.innerHTML =
             `<span class="chip chip--bad">${s.vulnerable_count || 0} vulnerable</span>` +
             `<span class="chip chip--warn">${s.needs_review_count || 0} needs review</span>` +
@@ -1325,6 +1435,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 error_message: r.error_message || null,
             });
         });
+        refreshFunctionalScorecard();
     }
 
     async function loadSession(id, mode) {
@@ -1522,6 +1633,7 @@ document.addEventListener('DOMContentLoaded', () => {
             lists.assertions.appendChild(legend);
         }
         renderDegradedBanner(data);
+        refreshFunctionalScorecard();
         updateResultTabCounts({
             All: positive.length + negative.length + edge.length + assertions.length,
             Positive: positive.length,

@@ -767,6 +767,25 @@ textarea {
 .pill--bad  { color: var(--bad);  background: var(--bad-subtle); }
 .pill--neutral { color: var(--text-secondary); background: var(--neutral-subtle); }
 
+/* Honest coverage scorecard: ring + pills + one honest sentence (both result views) */
+.scorecard { display: flex; align-items: center; gap: 20px; background: var(--bg-secondary);
+    border: 0.5px solid var(--border-color); border-radius: var(--radius-md);
+    padding: 1rem 1.25rem; margin-bottom: 1rem; }
+.scorecard-ring { position: relative; width: 96px; height: 96px; flex-shrink: 0; border-radius: 50%;
+    background: conic-gradient(var(--ok) calc(var(--pct, 0) * 1%), var(--bg-inset) 0);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.scorecard-ring::after { content: ""; position: absolute; inset: 10px; border-radius: 50%; background: var(--bg-secondary); }
+.scorecard-pct, .scorecard-pct-label { position: relative; z-index: 1; display: block; text-align: center; }
+.scorecard-pct { font-size: 22px; font-weight: 600; color: var(--text-primary); line-height: 1; }
+.scorecard-pct-label { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.scorecard--pending .scorecard-pct { color: var(--text-muted); }
+.scorecard-body { flex: 1; min-width: 0; }
+.scorecard-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.scorecard-note { font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.5; }
+@media (max-width: 640px) {
+    .scorecard { flex-direction: column; align-items: flex-start; }
+}
+
 .assertion-line { display: flex; gap: 8px; align-items: baseline; font-size: var(--fs-sm); }
 .assertion-line--verified   { color: var(--ok); }
 .assertion-line--unverified { color: var(--warn); }
