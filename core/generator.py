@@ -10,6 +10,7 @@ from llm.mistral_client import MistralClient, MistralClientError, MistralTruncat
 from llm.ai_router import AIRouter, AllProvidersFailedError
 from llm.prompt_templates import SYSTEM_PROMPT, build_user_prompt
 from core.analyzer import build_analysis_metadata
+from core.database import redact_body
 from core.deterministic_generator import generate_deterministic_cases
 
 
@@ -357,7 +358,12 @@ def generate_test_cases(
         return _safe_error_response("Invalid or missing 'endpoint' parameter.")
 
     try:
-        metadata = build_analysis_metadata(endpoint, method, sample_response)
+        # The analyzer copies sample values into the metadata and prompt, so a
+        # token inside the response (e.g. a login endpoint returning an
+        # access_token) would otherwise reach the AI provider. Mask a copy for
+        # the prompt only — grounding below keeps the real response.
+        prompt_sample = redact_body(sample_response) if sample_response is not None else None
+        metadata = build_analysis_metadata(endpoint, method, prompt_sample)
     except Exception as e:
         return _safe_error_response(f"Analysis failed: {e}")
 
@@ -365,7 +371,7 @@ def generate_test_cases(
         user_prompt = build_user_prompt(
             endpoint=endpoint,
             method=method,
-            sample_response=sample_response,
+            sample_response=prompt_sample,
             response_metadata=metadata,
         )
     except Exception as e:

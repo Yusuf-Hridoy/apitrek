@@ -290,5 +290,30 @@ def test_generate_test_cases_grounds_assertions_against_sample_response():
     assert result["assertions"][2]["grounded"] is False  # timing cannot be grounded
 
 
+def test_generate_masks_sample_response_secrets_in_prompt():
+    """A token inside the sample response must not reach the AI provider, while
+    grounding still uses the real response (keys are unchanged by masking)."""
+    mock_client = MagicMock()
+    mock_client.send_prompt.return_value = json.dumps({
+        "positive_test_cases": [{"id": "TC-POS-01", "title": "Valid request"}],
+        "negative_test_cases": [],
+        "edge_cases": [],
+        "assertions": [{"category": "schema", "rule": "Response body contains id", "severity": "critical"}],
+    })
+
+    result = generate_test_cases(
+        endpoint="https://api.example.com/login",
+        method="POST",
+        sample_response={"id": 1, "access_token": "SECRET123"},
+        mistral_client=mock_client,
+    )
+
+    sent_prompt = mock_client.send_prompt.call_args.kwargs["user_prompt"]
+    assert "SECRET123" not in sent_prompt
+    assert "access_token" in sent_prompt  # key preserved, value masked
+    # Grounding ran against the real response: id is present, so verified.
+    assert result["assertions"][0]["grounded"] is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
