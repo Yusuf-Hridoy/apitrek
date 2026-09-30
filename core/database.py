@@ -1,6 +1,7 @@
 """
 SQLite persistence for API Sentinel: sessions, test cases, execution results.
 
+
 Uses the built-in sqlite3 module with parameterized queries throughout.
 The database lives at DATABASE_PATH (default: data/api_sentinel.db under the
 project root). History is an enhancement — every public function raises on
@@ -8,6 +9,7 @@ real errors, so callers should wrap calls in try/except and degrade quietly.
 """
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -193,6 +195,64 @@ def redact_url(url: Any) -> Any:
         return url
 
 
+# Dict keys under which a stored per-test request payload keeps its headers or
+# URL. Functional payloads use {endpoint, method, headers, body}; security
+# payloads use e.g. {modified_endpoint, set_headers, set_body, ...}.
+_PAYLOAD_HEADER_KEYS = {"headers", "header", "set_header", "set_headers", "add_headers"}
+_PAYLOAD_URL_KEYS = {"endpoint", "url", "modified_endpoint", "target"}
+
+
+def redact_payload(value: Any) -> Any:
+    """Mask credentials inside a stored per-test request payload (any shape).
+
+    Header dicts are passed through ``redact_headers``, URL-ish strings through
+    ``redact_url``, secret-keyed body fields through the body rules, and every
+    other container is walked recursively. Non-container values pass through.
+    """
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            lk = str(k).lower()
+            if lk in _PAYLOAD_HEADER_KEYS and isinstance(v, dict):
+                out[k] = redact_headers(v)
+            elif lk in _PAYLOAD_URL_KEYS and isinstance(v, str):
+                out[k] = redact_url(v)
+            elif _is_sensitive_body_key(k):
+                out[k] = REDACTED
+            else:
+                out[k] = redact_payload(v)
+        return out
+    if isinstance(value, list):
+        return [redact_payload(i) for i in value]
+    return value
+
+
+# Stored execution responses are free text; APIs often echo the caller's
+# credentials back (cf. httpbin.org/headers). redact_body catches secret-named
+# JSON fields; these regexes catch bearer tokens and JWTs anywhere in the text.
+_BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*")
+_JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+
+
+def redact_response_text(text: Any) -> Any:
+    """Mask credentials in a stored execution response string.
+
+    JSON responses get secret fields masked via ``redact_body``; bearer tokens
+    and JWTs are then masked wherever they appear, JSON or not. Non-string
+    input is returned unchanged.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    try:
+        parsed = json.loads(text)
+        text = json.dumps(redact_body(parsed), ensure_ascii=False)
+    except (ValueError, TypeError):
+        pass
+    text = _BEARER_RE.sub(r"\1" + REDACTED, text)
+    text = _JWT_RE.sub(REDACTED, text)
+    return text
+
+
 def save_session(
     endpoint: str,
     method: str = "GET",
@@ -246,7 +306,7 @@ def save_test_cases(session_id: int, test_cases: List[Dict[str, Any]]) -> int:
             tc.get("description"),
             tc.get("expected_status"),
             json.dumps(tc.get("assertions")) if tc.get("assertions") is not None else None,
-            json.dumps(tc.get("payload")) if tc.get("payload") is not None else None,
+            json.dumps(redact_payload(tc.get("payload"))) if tc.get("payload") is not None else None,
             tc.get("owasp_category"),
             tc.get("severity"),
             tc.get("case_ref"),
@@ -277,7 +337,7 @@ def save_execution_results(session_id: int, results: List[Dict[str, Any]]) -> in
             str(r.get("test_case_id", "")),
             1 if r.get("passed") else 0,
             r.get("actual_status"),
-            r.get("actual_response_preview") or r.get("actual_response"),
+            redact_response_text(r.get("actual_response_preview") or r.get("actual_response")),
             r.get("error_message"),
             r.get("duration_ms"),
             now,

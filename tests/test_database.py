@@ -3,6 +3,7 @@ Unit tests for the core.database module (SQLite persistence).
 Uses tempfile-based databases via the DATABASE_PATH env override.
 """
 import sys
+import json
 import tempfile
 from pathlib import Path
 
@@ -255,6 +256,113 @@ def test_parameterized_queries_safe(db):
     session_id = db.save_session(endpoint=evil, method="GET")
     assert db.get_session(session_id)["endpoint"] == evil
     assert len(db.get_recent_sessions()) == 1  # table still exists
+
+
+# --- Credential masking in per-test payloads and execution responses ---
+
+
+def test_redact_payload_functional_shape(db):
+    payload = {
+        "endpoint": "https://api.example.com/x?api_key=SECRET123",
+        "method": "POST",
+        "headers": {"Authorization": "Bearer tok", "Accept": "application/json"},
+        "body": {"name": "y", "password": "hunter2"},
+    }
+    out = db.redact_payload(payload)
+    assert out["headers"]["Authorization"] == db.REDACTED
+    assert out["headers"]["Accept"] == "application/json"
+    assert "SECRET123" not in out["endpoint"]
+    assert out["endpoint"].startswith("https://api.example.com/x")
+    assert out["body"]["password"] == db.REDACTED
+    assert out["body"]["name"] == "y"
+    # Original dict is not mutated.
+    assert payload["headers"]["Authorization"] == "Bearer tok"
+
+
+def test_redact_payload_security_shape(db):
+    """Security payloads carry set_headers / modified_endpoint / set_body."""
+    payload = {
+        "modified_endpoint": "https://api.example.com/x?sig=abc",
+        "set_headers": {"Authorization": "Bearer tok"},
+        "set_body": {"token": "abc", "note": "ok"},
+        "remove_headers": ["authorization"],
+        "set_param": {"name": "redirect", "value": "http://localhost/"},
+    }
+    out = db.redact_payload(payload)
+    assert out["set_headers"]["Authorization"] == db.REDACTED
+    assert "abc" not in out["modified_endpoint"]
+    assert out["set_body"]["token"] == db.REDACTED
+    assert out["set_body"]["note"] == "ok"
+    assert out["remove_headers"] == ["authorization"]
+
+
+def test_save_test_cases_masks_payload(db):
+    session_id = db.save_session(endpoint="https://api.example.com/x", method="POST")
+    db.save_test_cases(session_id, [{
+        "category": "positive",
+        "title": "t",
+        "payload": {
+            "endpoint": "https://api.example.com/x",
+            "method": "POST",
+            "headers": {"Authorization": "Bearer tok", "Accept": "application/json"},
+            "body": {"id": 1},
+        },
+    }])
+    session = db.get_session(session_id)
+    stored = session["test_cases"][0]["payload"]
+    assert stored["headers"]["Authorization"] == db.REDACTED
+    assert stored["headers"]["Accept"] == "application/json"
+    assert stored["body"] == {"id": 1}
+
+
+def test_redact_response_text_json_secret_field(db):
+    out = db.redact_response_text('{"id": 1, "access_token": "abc.def.ghi"}')
+    assert "abc.def.ghi" not in out
+    assert db.REDACTED in out
+    assert '"id": 1' in out
+
+
+def test_redact_response_text_httpbin_style_echo(db):
+    text = json.dumps({"headers": {"Authorization": "Bearer abc.def", "Accept": "*/*"}})
+    out = db.redact_response_text(text)
+    assert "abc.def" not in out
+    assert db.REDACTED in out
+    assert "*/*" in out
+
+
+def test_redact_response_text_plain_bearer(db):
+    out = db.redact_response_text("got error: Bearer abc123 while calling api")
+    assert "abc123" not in out
+    assert "Bearer " + db.REDACTED in out
+
+
+def test_redact_response_text_bare_jwt(db):
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dQw4w9WgXcQ"
+    out = db.redact_response_text(f"token={jwt}")
+    assert jwt not in out
+    assert db.REDACTED in out
+
+
+def test_redact_response_text_non_secret_unchanged(db):
+    text = '{"id": 1, "title": "hello", "price": 9.5}'
+    assert db.redact_response_text(text) == text
+    assert db.redact_response_text("") == ""
+    assert db.redact_response_text(None) is None
+    assert db.redact_response_text({"not": "a string"}) == {"not": "a string"}
+
+
+def test_save_execution_results_masks_response(db):
+    session_id = db.save_session(endpoint="https://api.example.com/x", method="GET")
+    db.save_execution_results(session_id, [{
+        "test_case_id": "TC-POS-01",
+        "passed": True,
+        "actual_status": 200,
+        "actual_response": '{"headers": {"Authorization": "Bearer abc.def.ghi"}}',
+    }])
+    session = db.get_session(session_id)
+    stored = session["execution_results"][0]["actual_response"]
+    assert "abc.def.ghi" not in stored
+    assert db.REDACTED in stored
 
 
 if __name__ == "__main__":

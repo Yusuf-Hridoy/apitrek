@@ -65,7 +65,10 @@ def test_special_char_endpoint_round_trips_through_history():
                 assert len(s["test_cases"]) == 3
                 by_ref = {tc["case_ref"]: tc for tc in s["test_cases"]}
                 assert by_ref["TC-POS-01"]["payload"]["endpoint"] == SPECIAL_ENDPOINT
-                assert by_ref["TC-NEG-01"]["payload"]["headers"]["Authorization"] == "Bearer 'expired'<>"
+                # Stored payloads are masked at rest: the Authorization value is
+                # replaced, the special characters in it don't need round-tripping.
+                from core.database import REDACTED
+                assert by_ref["TC-NEG-01"]["payload"]["headers"]["Authorization"] == REDACTED
                 assert by_ref["TC-EDGE-01"]["title"] == "Odd query"
                 assert by_ref["TC-POS-01"]["expected_status"] == 200
 
