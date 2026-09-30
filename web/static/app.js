@@ -309,6 +309,117 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- Paste cURL: fill the form from a copied cURL command ---
+    // Parsed entirely in the browser (web/static/curl.js). Works for both
+    // Functional and Security mode since they share #testForm.
+    const curlToggle = document.getElementById('curlToggle');
+    const curlPanel = document.getElementById('curlPanel');
+    const curlInput = document.getElementById('curlInput');
+    const curlFillBtn = document.getElementById('curlFillBtn');
+    const curlFeedback = document.getElementById('curlFeedback');
+    const endpointInput = document.getElementById('endpoint');
+
+    // Mirrors _SENSITIVE_HEADER_HINTS in core/database.py.
+    const SENSITIVE_HEADER_HINTS = ['authorization', 'auth', 'cookie', 'token', 'secret',
+        'password', 'passwd', 'pwd', 'api-key', 'apikey', 'api_key', 'credential',
+        'x-csrf', 'session', 'access-key', 'private-key', 'bearer'];
+    const SENSITIVE_QUERY_PARAMS = ['api_key', 'apikey', 'key', 'token', 'access_token',
+        'sig', 'signature', 'secret'];
+
+    function setCurlFeedback(lines, kind) {
+        if (!curlFeedback) return;
+        curlFeedback.className = `curl-feedback ${kind === 'ok' ? 'is-ok' : 'is-err'}`;
+        curlFeedback.innerHTML = lines
+            .map((l) => `<span class="${l.cls || ''}">${escapeHtml(l.text)}</span>`)
+            .join('');
+    }
+
+    function applyCurl(text, source /* 'panel' | 'paste' */) {
+        if (!window.ApitrekCurl) return;
+        const result = window.ApitrekCurl.parseCurl(text);
+
+        if (!result.ok) {
+            if (source === 'paste' && curlPanel && curlToggle) {
+                curlPanel.classList.remove('hidden');
+                curlToggle.setAttribute('aria-expanded', 'true');
+                if (curlInput) curlInput.value = text;
+            }
+            setCurlFeedback([{ text: result.error }], 'err');
+            return;
+        }
+
+        document.getElementById('endpoint').value = result.url;
+        if (result.method) document.getElementById('method').value = result.method;
+        const headerCount = result.headers ? Object.keys(result.headers).length : 0;
+        document.getElementById('headers').value = headerCount
+            ? JSON.stringify(result.headers, null, 2) : '';
+        document.getElementById('requestBody').value = result.body
+            ? JSON.stringify(result.body, null, 2) : '';
+        // An old sample from a different endpoint would give wrong grounding.
+        document.getElementById('sampleResponse').value = '';
+        setFieldError('endpoint', 'endpointError', null);
+        setFieldError('headers', 'headersError', null);
+        setFieldError('requestBody', 'requestBodyError', null);
+        if (headerCount || result.body) {
+            document.getElementById('advancedFields').open = true;
+        }
+
+        const lines = [{ text: window.ApitrekCurl.describeParse(result) }];
+        result.notes.forEach((n) => lines.push({ text: n, cls: 'curl-note' }));
+
+        const headerBlob = Object.keys(result.headers || {}).join(' ').toLowerCase();
+        if (SENSITIVE_HEADER_HINTS.some((h) => headerBlob.includes(h))) {
+            lines.push({
+                text: "Auth detected. It's used only to run your requests and is masked before anything is saved to History.",
+                cls: 'curl-note',
+            });
+        }
+        try {
+            const params = new URL(result.url).searchParams;
+            for (const [k] of params) {
+                if (SENSITIVE_QUERY_PARAMS.includes(k.toLowerCase())) {
+                    lines.push({
+                        text: 'This URL has a key in the query string. URLs are sent to the AI provider during generation — prefer passing keys as a header.',
+                        cls: 'curl-warn',
+                    });
+                    break;
+                }
+            }
+        } catch (err) { /* relative or odd URL — skip the check */ }
+
+        setCurlFeedback(lines, 'ok');
+    }
+
+    if (curlToggle && curlPanel) {
+        curlToggle.addEventListener('click', () => {
+            const hidden = curlPanel.classList.toggle('hidden');
+            curlToggle.setAttribute('aria-expanded', String(!hidden));
+        });
+    }
+    if (curlFillBtn && curlInput) {
+        curlFillBtn.addEventListener('click', () => applyCurl(curlInput.value, 'panel'));
+        curlInput.addEventListener('input', () => curlFeedback.classList.add('hidden'));
+    }
+    if (endpointInput) {
+        // Auto-detect a pasted cURL in the endpoint field. Must run on paste,
+        // not submit — the form's native url/required validation would reject
+        // the raw cURL string before the submit handler ever runs.
+        endpointInput.addEventListener('paste', (e) => {
+            const text = e.clipboardData && e.clipboardData.getData('text');
+            if (text && window.ApitrekCurl && window.ApitrekCurl.looksLikeCurl(text)) {
+                e.preventDefault();
+                applyCurl(text, 'paste');
+            }
+        });
+        // Fallback for drag-drop / autofill, which don't fire paste.
+        endpointInput.addEventListener('change', () => {
+            const value = endpointInput.value;
+            if (value && window.ApitrekCurl && window.ApitrekCurl.looksLikeCurl(value)) {
+                applyCurl(value, 'paste');
+            }
+        });
+    }
+
     copyBtn.addEventListener('click', () => {
         if (!lastResult) return;
         // Strip internal underscore-prefixed keys (_session_id, _provider, _error,

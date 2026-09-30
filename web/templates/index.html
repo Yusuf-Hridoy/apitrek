@@ -83,6 +83,7 @@
                                     <div class="label-row">
                                         <label for="endpoint">API Endpoint <span class="required">*</span></label>
                                         <button type="button" id="sampleBtn" class="sample-btn">▶ Try a sample API</button>
+                                        <button type="button" id="curlToggle" class="sample-btn" aria-expanded="false" aria-controls="curlPanel">Paste cURL</button>
                                     </div>
                                     <input
                                         type="url"
@@ -93,6 +94,17 @@
                                     >
                                     <span class="hint-text" id="sampleHint">One click fills a safe public endpoint and runs the full pipeline — no typing needed.</span>
                                     <span class="field-error hidden" id="endpointError"></span>
+                                </div>
+
+                                <div class="curl-panel hidden" id="curlPanel">
+                                    <label for="curlInput">Paste a cURL command</label>
+                                    <textarea id="curlInput" rows="5" spellcheck="false"
+                                        placeholder="curl -X POST 'https://api.example.com/orders' -H 'Content-Type: application/json' --data-raw '{&quot;id&quot;: 1}'"></textarea>
+                                    <div class="curl-actions">
+                                        <button type="button" id="curlFillBtn" class="btn-secondary">Fill form from cURL</button>
+                                        <span class="hint-text">Parsed in your browser — nothing is sent until you generate or scan.</span>
+                                    </div>
+                                    <div id="curlFeedback" class="curl-feedback hidden" role="status" aria-live="polite"></div>
                                 </div>
 
                                 <div class="form-row">
@@ -421,6 +433,7 @@
         <p style="text-align:center;padding:1rem;">Apitrek requires JavaScript for interactive test generation and execution.</p>
     </noscript>
 
+    <script src="/static/curl.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

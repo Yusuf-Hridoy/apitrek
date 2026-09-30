@@ -84,7 +84,7 @@ _INDEX_HTML = PROJECT_ROOT / "web" / "templates" / "index.html"
 def _asset_version() -> str:
     """Short hash of the static assets so the URL version changes when they do."""
     h = hashlib.md5()
-    for name in ("app.js", "style.css", "darkmode.js"):
+    for name in ("app.js", "style.css", "darkmode.js", "curl.js"):
         p = _STATIC_DIR / name
         if p.exists():
             h.update(p.read_bytes())
@@ -100,6 +100,7 @@ async def index(request: Request):
         .replace("/static/app.js", f"/static/app.js?v={v}")
         .replace("/static/style.css", f"/static/style.css?v={v}")
         .replace("/static/darkmode.js", f"/static/darkmode.js?v={v}")
+        .replace("/static/curl.js", f"/static/curl.js?v={v}")
     )
     return HTMLResponse(
         html,

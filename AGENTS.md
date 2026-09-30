@@ -49,7 +49,7 @@ llm/         ai_router.py (failover) + one client per provider + prompt_template
 exports/     python_test_generator.py (pytest), postman_generator.py, cicd_generator.py,
              security_report_generator.py, assertion_translator.py (rule -> real assert)
 web/         app.py (FastAPI), routes/ (generate, execute, security, cicd, export, openapi),
-             static/ (app.js, style.css, darkmode.js), templates/index.html
+             static/ (app.js, curl.js, style.css, darkmode.js), templates/index.html
 cli/         argparse CLI entry
 tests/       pytest, one file per module (~288 tests). Keep them green.
 ```

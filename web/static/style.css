@@ -333,6 +333,64 @@ textarea {
     background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
 }
 
+/* Paste cURL panel */
+.curl-panel {
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-inset);
+}
+
+.curl-panel label {
+    display: block;
+    margin-bottom: 0.375rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.curl-panel textarea {
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+}
+
+.curl-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+}
+
+.curl-feedback {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.curl-feedback.is-ok {
+    background: var(--ok-subtle);
+    color: var(--ok);
+}
+
+.curl-feedback.is-err {
+    background: var(--bad-subtle);
+    color: var(--bad);
+}
+
+.curl-feedback .curl-note {
+    display: block;
+    color: var(--text-secondary);
+}
+
+.curl-feedback .curl-warn {
+    display: block;
+    color: var(--warn);
+}
+
 /* Spinner */
 .spinner {
     display: inline-block;
