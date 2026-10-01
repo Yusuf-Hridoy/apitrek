@@ -173,3 +173,19 @@ test('first-token-not-curl with $ prompt', () => {
     const r = parseCurl('$ wget https://x.com');
     assert.equal(r.ok, false);
 });
+
+test("non-JSON -d body with no -X still defaults to POST", () => {
+    const r = parseCurl(`curl https://x.com/a -d 'a=1'`);
+    assert.equal(r.ok, true);
+    assert.equal(r.method, 'POST');
+    assert.equal(r.body, null);
+    assert.ok(r.notes.some((n) => n.includes('JSON-object bodies only')), r.notes.join(' | '));
+});
+
+test("-G with -d stays GET with the data in the query string", () => {
+    const r = parseCurl(`curl -G -d 'q=1' https://x.com/a`);
+    assert.equal(r.ok, true);
+    assert.equal(r.method, 'GET');
+    assert.equal(r.url, 'https://x.com/a?q=1');
+    assert.equal(r.body, null);
+});

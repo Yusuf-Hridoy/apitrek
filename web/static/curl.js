@@ -286,7 +286,7 @@
             }
         }
 
-        if (method === null) method = body !== null ? 'POST' : 'GET';
+        if (method === null) method = bodyParts.length ? 'POST' : 'GET';
         if (!SUPPORTED_METHODS.includes(method)) {
             notes.push(`Method ${method} isn't supported — kept your current method.`);
             method = null;
