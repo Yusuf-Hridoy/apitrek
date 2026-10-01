@@ -365,5 +365,40 @@ def test_save_execution_results_masks_response(db):
     assert db.REDACTED in stored
 
 
+def test_redact_response_text_masks_echoed_cookie_header(db):
+    text = json.dumps({"headers": {"Cookie": "sid=abc", "Accept": "*/*"}})
+    out = db.redact_response_text(text)
+    assert "sid=abc" not in out
+    assert db.REDACTED in out
+    assert "*/*" in out
+
+
+def test_redact_response_text_masks_set_cookie_key(db):
+    out = db.redact_response_text('{"Set-Cookie": "token=xyz"}')
+    assert "token=xyz" not in out
+    assert db.REDACTED in out
+
+
+def test_redact_response_text_masks_plain_cookie_line(db):
+    out = db.redact_response_text("Cookie: sid=abc\nContent-Type: json")
+    assert "sid=abc" not in out
+    assert "Cookie: " + db.REDACTED in out
+    assert "Content-Type: json" in out
+
+
+def test_save_execution_results_masks_echoed_cookie(db):
+    session_id = db.save_session(endpoint="https://api.example.com/x", method="GET")
+    db.save_execution_results(session_id, [{
+        "test_case_id": "TC-POS-01",
+        "passed": True,
+        "actual_status": 200,
+        "actual_response": json.dumps({"headers": {"Cookie": "sid=abc"}}),
+    }])
+    session = db.get_session(session_id)
+    stored = session["execution_results"][0]["actual_response"]
+    assert "sid=abc" not in stored
+    assert db.REDACTED in stored
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

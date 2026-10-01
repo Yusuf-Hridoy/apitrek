@@ -228,28 +228,50 @@ def redact_payload(value: Any) -> Any:
 
 
 # Stored execution responses are free text; APIs often echo the caller's
-# credentials back (cf. httpbin.org/headers). redact_body catches secret-named
-# JSON fields; these regexes catch bearer tokens and JWTs anywhere in the text.
+# credentials back (cf. httpbin.org/headers). Responses are never reused as
+# request input, so they're masked more broadly than request bodies: on top of
+# the body rules, header-style keys (Cookie, Set-Cookie, session ids) and raw
+# "Cookie: ..." lines get masked too. The regexes catch bearer tokens and JWTs
+# anywhere in the text.
+_RESPONSE_EXTRA_KEYS = ("cookie", "set-cookie", "setcookie", "session", "sessionid")
+_COOKIE_LINE_RE = re.compile(r"(?im)^((?:set-)?cookie\s*:\s*).+$")
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*")
 _JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+
+
+def _redact_response_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            lk = str(k).lower()
+            if _is_sensitive_body_key(k) or any(m in lk for m in _RESPONSE_EXTRA_KEYS):
+                out[k] = REDACTED
+            else:
+                out[k] = _redact_response_value(v)
+        return out
+    if isinstance(value, list):
+        return [_redact_response_value(i) for i in value]
+    return value
 
 
 def redact_response_text(text: Any) -> Any:
     """Mask credentials in a stored execution response string.
 
-    JSON responses get secret fields masked via ``redact_body``; bearer tokens
-    and JWTs are then masked wherever they appear, JSON or not. Non-string
-    input is returned unchanged.
+    JSON responses get secret fields masked (body rules plus header-style keys
+    like Cookie/Set-Cookie/session); bearer tokens, JWTs, and raw Cookie lines
+    are then masked wherever they appear, JSON or not. Non-string input is
+    returned unchanged.
     """
     if not isinstance(text, str) or not text:
         return text
     try:
         parsed = json.loads(text)
-        text = json.dumps(redact_body(parsed), ensure_ascii=False)
+        text = json.dumps(_redact_response_value(parsed), ensure_ascii=False)
     except (ValueError, TypeError):
         pass
     text = _BEARER_RE.sub(r"\1" + REDACTED, text)
     text = _JWT_RE.sub(REDACTED, text)
+    text = _COOKIE_LINE_RE.sub(r"\1" + REDACTED, text)
     return text
 
 
