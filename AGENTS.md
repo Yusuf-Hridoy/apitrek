@@ -51,7 +51,7 @@ exports/     python_test_generator.py (pytest), postman_generator.py, cicd_gener
 web/         app.py (FastAPI), routes/ (generate, execute, security, cicd, export, openapi),
              static/ (app.js, curl.js, style.css, darkmode.js), templates/index.html
 cli/         argparse CLI entry
-tests/       pytest, one file per module (~288 tests). Keep them green.
+tests/       pytest, one file per module (~302 tests). Keep them green.
 ```
 
 ## How to run + test
@@ -59,6 +59,7 @@ tests/       pytest, one file per module (~288 tests). Keep them green.
 ```bash
 pip install -r requirements.txt pytest httpx --break-system-packages
 python -m pytest -q                 # full suite — must stay green
+node --test tests/js/*.mjs          # cURL parser tests — must stay green
 python -m uvicorn web.app:app --reload --port 8000
 ```
 
