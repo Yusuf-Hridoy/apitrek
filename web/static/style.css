@@ -315,6 +315,16 @@ textarea {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    flex-wrap: wrap;
+    row-gap: 6px;
+}
+
+.label-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;   /* keeps the pair right-aligned even when the row wraps */
+    flex-wrap: wrap;
 }
 
 .sample-btn {
