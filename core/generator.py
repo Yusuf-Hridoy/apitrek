@@ -10,7 +10,7 @@ from llm.mistral_client import MistralClient, MistralClientError, MistralTruncat
 from llm.ai_router import AIRouter, AllProvidersFailedError
 from llm.prompt_templates import SYSTEM_PROMPT, build_user_prompt
 from core.analyzer import build_analysis_metadata
-from core.database import redact_body
+from core.database import redact_body, redact_response_text, _is_sensitive_body_key
 from core.deterministic_generator import generate_deterministic_cases
 
 
@@ -211,6 +211,26 @@ def _resolve_path(obj: Any, path: str) -> bool:
     return True
 
 
+def _resolve_value(obj: Any, path: str) -> tuple[bool, Any, bool]:
+    """Return (found, value, from_list) for a dotted path. Same traversal rules
+    as _resolve_path: lists use their first element."""
+    cur = obj
+    from_list = False
+    for part in path.split("."):
+        if isinstance(cur, dict):
+            if part not in cur:
+                return False, None, from_list
+            cur = cur[part]
+        elif isinstance(cur, list):
+            from_list = True
+            if not cur or not isinstance(cur[0], dict) or part not in cur[0]:
+                return False, None, from_list
+            cur = cur[0][part]
+        else:
+            return False, None, from_list
+    return True, cur, from_list
+
+
 def _field_present(response: Any, field: str) -> bool:
     if response is None:
         return False
@@ -226,42 +246,191 @@ def _field_present(response: Any, field: str) -> bool:
     return False
 
 
-def _is_grounded(rule: str, response: Any) -> bool:
-    """Deterministic grounding: is this assertion observably true of `response`?"""
+def _field_value(response: Any, field: str) -> tuple[bool, Any, bool]:
+    """Return (found, value, from_list) for a plain or dotted field name.
+    Mirrors _field_present: dict key, or key on the first element of a
+    top-level list; dotted names go through _resolve_value."""
+    try:
+        if "." in field:
+            return _resolve_value(response, field)
+        if isinstance(response, dict):
+            if field in response:
+                return True, response[field], False
+            return False, None, False
+        if isinstance(response, list) and response and isinstance(response[0], dict):
+            if field in response[0]:
+                return True, response[0][field], True
+            return False, None, True
+    except Exception:
+        return False, None, False
+    return False, None, False
+
+
+_JSON_TYPE_NAMES = {
+    type(None): "null",
+    bool: "boolean",
+    int: "integer",
+    float: "number",
+    str: "string",
+    list: "array",
+    dict: "object",
+}
+
+
+def _value_type(value: Any) -> str:
+    return _JSON_TYPE_NAMES.get(type(value), type(value).__name__)
+
+
+def _value_preview(value: Any) -> str:
+    if isinstance(value, list):
+        return f"array ({len(value)} items)"
+    if isinstance(value, dict):
+        return f"object ({len(value)} keys)"
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        text = str(value)
+    if len(text) > 60:
+        text = text[:57] + "…"
+    return text
+
+
+_GROUNDING_MASKED = "***masked***"
+
+
+def _mask_preview(preview: str, path: str) -> str:
+    """Mask the preview if the path or the value itself looks sensitive."""
+    segments = [s for s in str(path).split(".") if s]
+    if any(
+        _is_sensitive_body_key(seg) or "cookie" in seg.lower() or "session" in seg.lower()
+        for seg in segments
+    ):
+        return _GROUNDING_MASKED
+    return redact_response_text(preview)
+
+
+def explain_grounding(rule: str, response: Any) -> Dict[str, Any]:
+    """Explain why an assertion is (or isn't) verified against the response.
+
+    Single source of truth for grounding: _is_grounded is a thin wrapper over
+    the ``grounded`` key of this result, so the verdict can never drift from
+    the evidence shown in the UI.
+    """
+    ev: Dict[str, Any] = {
+        "grounded": False,
+        "reason": "no_response",
+        "path": None,
+        "value_preview": None,
+        "value_type": None,
+        "from_list": False,
+        "detail": "",
+    }
+
+    def _found(path: str, value: Any, from_list: bool) -> Dict[str, Any]:
+        ev.update(
+            reason="found",
+            grounded=True,
+            path=path,
+            from_list=from_list,
+            value_type=_value_type(value),
+            value_preview=_mask_preview(_value_preview(value), path),
+            detail="Found in the fetched response."
+            + (" Checked against the first item of the list." if from_list else ""),
+        )
+        return ev
+
     if response is None or not isinstance(rule, str):
-        return False
+        ev["detail"] = (
+            "There was no response to check against. "
+            "Turn on auto-fetch or paste a sample response."
+        )
+        return ev
+
     text = rule.strip()
     low = text.lower()
 
     if "valid json" in low:
-        return True
+        ev.update(
+            reason="valid_json",
+            grounded=True,
+            detail="The fetched response parsed as valid JSON.",
+        )
+        return ev
     if "response time" in low or "status code" in low or "status ==" in low:
-        return False
+        ev.update(
+            reason="not_checkable",
+            detail=(
+                "Status codes and response times change per run, so one sample "
+                "response can't prove them. They're checked when you run the tests."
+            ),
+        )
+        return ev
 
     m = _FIELD_QUOTED.search(text)
     if m:
-        return _field_present(response, m.group(1))
+        path = m.group(1)
+        found, value, from_list = _field_value(response, path)
+        if found:
+            return _found(path, value, from_list)
+        ev.update(
+            reason="not_in_response",
+            path=path,
+            detail=(
+                f'The AI expected "{path}", but the fetched response has no such '
+                "field. This test would fail or check nothing."
+            ),
+        )
+        return ev
     m = _FIELD_DOTTED.search(text)
     if m:
-        return _field_present(response, m.group(1))
+        path = m.group(1)
+        found, value, from_list = _field_value(response, path)
+        if found:
+            return _found(path, value, from_list)
+        ev.update(
+            reason="not_in_response",
+            path=path,
+            detail=(
+                f'The AI expected "{path}", but the fetched response has no such '
+                "field. This test would fail or check nothing."
+            ),
+        )
+        return ev
 
     for tok in re.findall(r"\b[A-Za-z_]\w*\b", text):
         if tok.lower() in _GROUNDING_STOPWORDS:
             continue
-        if _field_present(response, tok):
-            return True
-    return False
+        found, value, from_list = _field_value(response, tok)
+        if found:
+            return _found(tok, value, from_list)
+
+    ev.update(
+        reason="no_field_detected",
+        detail=(
+            "Couldn't tell which field this assertion refers to, so it can't be "
+            "checked automatically. Review it manually."
+        ),
+    )
+    return ev
+
+
+def _is_grounded(rule: str, response: Any) -> bool:
+    """Deterministic grounding: is this assertion observably true of `response`?"""
+    return explain_grounding(rule, response)["grounded"]
 
 
 def annotate_grounding(assertions: List[Dict[str, Any]], response: Any) -> List[Dict[str, Any]]:
-    """Add 'grounded' (bool) to each assertion based on the fetched response."""
+    """Add 'grounded' (bool) and 'grounding' (evidence) to each assertion."""
     for a in assertions or []:
         if not isinstance(a, dict):
             continue
         try:
-            a["grounded"] = _is_grounded(a.get("rule", ""), response)
+            ev = explain_grounding(a.get("rule", ""), response)
+            a["grounded"] = ev["grounded"]
+            a["grounding"] = ev
         except Exception:
             a["grounded"] = False
+            a["grounding"] = None
     return assertions
 
 

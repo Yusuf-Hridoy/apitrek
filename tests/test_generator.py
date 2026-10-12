@@ -258,9 +258,13 @@ def test_generate_test_cases_retry_merges_only_missing_sections():
     # Sections from the first response are preserved
     assert result["positive_test_cases"] == [{"id": "TC-POS-01"}]
     assert result["negative_test_cases"] == [{"id": "TC-NEG-01"}]
-    # Missing sections merged from the retry
     assert result["edge_cases"] == [{"id": "TC-EDGE-01"}]
-    assert result["assertions"] == [{"category": "status_code", "rule": "200 OK", "grounded": False}]
+    # Missing sections merged from the retry (assertions also carry grounding
+    # evidence added by annotate_grounding)
+    assert result["assertions"][0]["category"] == "status_code"
+    assert result["assertions"][0]["rule"] == "200 OK"
+    assert result["assertions"][0]["grounded"] is False
+    assert result["assertions"][0]["grounding"]["reason"] == "no_response"
 
 
 def test_generate_test_cases_grounds_assertions_against_sample_response():
