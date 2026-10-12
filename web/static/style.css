@@ -1186,7 +1186,7 @@ textarea {
     white-space: nowrap;
 }
 
-button.ground-badge { border: none; cursor: pointer; font: inherit; }
+button.ground-badge { border: none; cursor: pointer; font-family: inherit; line-height: inherit; }
 button.ground-badge:focus-visible { outline: 2px solid var(--interactive); outline-offset: 2px; }
 .ground-caret { font-size: 0.7em; margin-left: 2px; }
 
