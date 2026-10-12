@@ -1746,7 +1746,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (assertions.length && lists.assertions) {
             const legend = document.createElement('p');
             legend.className = 'ground-legend';
-            legend.innerHTML = '<span class="ground-verified">✓ verified</span> = checked against the real fetched response &middot; <span class="ground-unverified">⚠ unverified</span> = model-generated, confirm before trusting';
+            legend.innerHTML = '<span class="ground-verified">✓ verified</span> = checked against the real fetched response &middot; <span class="ground-unverified">⚠ unverified</span> = model-generated, confirm before trusting &middot; click a badge to see why';
             lists.assertions.appendChild(legend);
         }
         renderDegradedBanner(data);
@@ -1862,7 +1862,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        assertions.forEach((a) => {
+        assertions.forEach((a, idx) => {
             const el = document.createElement('div');
             el.className = 'case-item';
 
@@ -1871,9 +1871,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const categoryTag = `<span class="tag">${escapeHtml(a.category || 'general')}</span>`;
 
             const grounded = a.grounded === true;
-            const groundBadge = grounded
-                ? '<span class="ground-badge ground-verified" title="Checked against the real fetched response">✓ verified</span>'
-                : '<span class="ground-badge ground-unverified" title="Model-generated; no ground truth. Confirm before trusting.">⚠ unverified</span>';
+            const evId = `ground-ev-${idx}`;
+            const groundBadge = `<button type="button"
+                class="ground-badge ${grounded ? 'ground-verified' : 'ground-unverified'}"
+                aria-expanded="false" aria-controls="${evId}"
+                title="Click to see why">${grounded ? '✓ verified' : '⚠ unverified'} <span class="ground-caret">▾</span></button>`;
 
             el.innerHTML = `
                 <div class="case-row">
@@ -1884,13 +1886,60 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button type="button" class="btn-run">Run</button>
                     <span class="chevron">&#9662;</span>
                 </div>
+                <div class="ground-evidence ${grounded ? 'is-ok' : 'is-warn'} hidden" id="${evId}" role="region"></div>
                 <div class="case-body hidden">
                     <div class="case-details hidden"></div>
                 </div>
             `;
             container.appendChild(el);
             registerCaseCard(el, a, 'assertion');
+
+            // Sibling of .case-row (not inside it), so clicks in the panel
+            // don't toggle the card. stopPropagation keeps the badge click
+            // from opening/closing the card too.
+            const badge = el.querySelector('.ground-badge');
+            const panel = el.querySelector('.ground-evidence');
+            badge.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const opening = panel.classList.contains('hidden');
+                if (opening && !panel.dataset.rendered) {
+                    panel.innerHTML = renderGroundingEvidence(a.grounding, grounded);
+                    panel.dataset.rendered = '1';
+                }
+                panel.classList.toggle('hidden', !opening);
+                badge.setAttribute('aria-expanded', String(opening));
+                badge.querySelector('.ground-caret').textContent = opening ? '▴' : '▾';
+            });
         });
+    }
+
+    // Evidence shown under an assertion row when its badge is clicked. Every
+    // value is escaped — path and preview come from a third-party API response.
+    function renderGroundingEvidence(ev, grounded) {
+        if (!ev) {
+            return '<p class="ev-detail">No evidence saved for this result. Generate again to see why.</p>';
+        }
+        const detail = escapeHtml(ev.detail || '');
+        if (grounded) {
+            let html = '<p class="ev-title">Evidence from the real response</p>';
+            if (ev.reason !== 'valid_json' && ev.path != null) {
+                html += `<div class="ev-grid">
+                    <span class="ev-key">Path</span><span class="ev-val">${escapeHtml(String(ev.path))}</span>
+                    <span class="ev-key">Value</span><span class="ev-val">${escapeHtml(ev.value_preview != null ? String(ev.value_preview) : '—')}</span>
+                    <span class="ev-key">Type</span><span class="ev-val">${escapeHtml(ev.value_type != null ? String(ev.value_type) : '—')}</span>
+                </div>`;
+            }
+            html += `<p class="ev-detail">${detail}</p>`;
+            return html;
+        }
+        const titles = {
+            not_in_response: 'Field not in response',
+            not_checkable: "Can't be confirmed from one response",
+            no_field_detected: "Couldn't identify the field",
+            no_response: 'No response to check against',
+        };
+        const title = titles[ev.reason] || 'Unverified';
+        return `<p class="ev-title">${escapeHtml(title)}</p><p class="ev-detail">${detail}</p>`;
     }
 
     function escapeHtml(str) {
