@@ -50,7 +50,13 @@ def _cases_for_db(result: Dict[str, Any]) -> list:
             "description": assertion.get("category"),
             "expected_status": None,
             "assertions": [assertion.get("rule")] if assertion.get("rule") else [],
-            "payload": None,
+            # No schema column for grounding, so the verdict + evidence ride in
+            # the assertion row's payload. save_test_cases() passes payload
+            # through redact_payload(); previews are pre-masked in the generator.
+            "payload": {
+                "grounded": assertion.get("grounded", False),
+                "grounding": assertion.get("grounding"),
+            },
             "severity": assertion.get("severity"),
             "grounded": assertion.get("grounded", False),
         })

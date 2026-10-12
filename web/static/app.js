@@ -1492,13 +1492,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 // ids are carried (not shown for assertions) so stored execution
                 // results can be matched back on restore. Assertions have no LLM
                 // id, so the DB row id is the only key available.
+                // Sessions saved before grounding evidence existed have no
+                // payload; those rows restore as unverified with no evidence,
+                // same as they showed before.
+                const stored = tc.payload || {};
                 result.assertions.push({
                     id: String(tc.id),
                     _dbId: String(tc.id),
                     category: tc.description || 'general',
                     rule: tc.title || '',
                     severity: tc.severity || 'medium',
-                    grounded: tc.grounded === true,
+                    grounded: stored.grounded === true || tc.grounded === true,
+                    grounding: stored.grounding || null,
                 });
                 return;
             }
