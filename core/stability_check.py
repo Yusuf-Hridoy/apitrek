@@ -44,8 +44,10 @@ def _collect(response: Any) -> Dict[str, Any]:
     """Map dotted field path -> value, using the grounding convention: nested
     objects join with '.', lists descend into the first element (so a list
     field keeps its own path, e.g. 'items', and its items appear as
-    'items.sku'). Intermediate dicts are not entries — their leaf children
-    carry any change. A top-level list response contributes its first
+    'items.sku'). Every path is recorded — including object-valued parents —
+    so presence and type are tracked at every level: a parent that is an
+    object in some calls and null in others must be seen as present, or its
+    flakiness is invisible. A top-level list response contributes its first
     element's fields (no named root entry)."""
     out: Dict[str, Any] = {}
 
@@ -54,6 +56,7 @@ def _collect(response: Any) -> Dict[str, Any]:
             for k, v in node.items():
                 p = f"{prefix}.{k}" if prefix else str(k)
                 if isinstance(v, dict):
+                    out[p] = v
                     walk(v, p)
                 elif isinstance(v, list):
                     out[p] = v
@@ -107,6 +110,11 @@ def _entry_for(path: str, vals: List[Any]) -> Dict[str, Any]:
         entry.update(status="flaky", kind="missing_sometimes")
     elif len(set(types)) > 1:
         entry.update(status="flaky", kind="type_changes")
+    elif all(isinstance(v, dict) for v in present):
+        # Object parents are containers: a change inside them is carried by
+        # their child entries, so the parent itself stays stable unless its
+        # own presence or type varied (handled above).
+        pass
     elif all(isinstance(v, list) for v in present):
         if any(len(v) == 0 for v in present) and any(len(v) > 0 for v in present):
             entry.update(status="flaky", kind="empty_sometimes")
@@ -141,9 +149,36 @@ def compare_responses(responses: List[Any]) -> Dict[str, Any]:
             raw_first[path] = by_call[0]
         fields[path] = _entry_for(path, [by_call.get(i, _ABSENT) for i in range(calls)])
 
+    # A child that is "missing" only because its object parent was null in
+    # some calls is not independently flaky — the parent's condition covers
+    # it, and exports guard on the parent.
+    for path, entry in fields.items():
+        if entry["kind"] != "missing_sometimes" or "." not in path:
+            continue
+        parent = path.rsplit(".", 1)[0]
+        while parent:
+            pentry = fields.get(parent)
+            if (
+                pentry
+                and pentry.get("kind") == "type_changes"
+                and "null" in pentry.get("types", [])
+                and all(t in ("object", "null") for t in pentry.get("types", []))
+            ):
+                entry["kind"] = "parent_sometimes_null"
+                break
+            parent = parent.rsplit(".", 1)[0] if "." in parent else ""
+
+    # Summary counts leaf fields and list fields; an object-valued path is a
+    # container, so it counts only when it is itself flaky (otherwise every
+    # nested object would inflate "N fields stable").
     summary = {"stable": 0, "dynamic": 0, "flaky": 0}
     for entry in fields.values():
-        summary[entry["status"]] += 1
+        observed = [t for t in entry["types"] if t != "missing"]
+        if all(t == "object" for t in observed):
+            if entry["status"] == "flaky":
+                summary["flaky"] += 1
+        else:
+            summary[entry["status"]] += 1
 
     out: Dict[str, Any] = {
         "ran": True,
