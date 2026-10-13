@@ -301,7 +301,13 @@ def pytest_assertions(response: Any, rules: List[str], stability: Optional[dict]
             a = acc_for(path)
             info = _flaky_for(_dotted(path), stability)
             guards = _py_guard_segments(path, prefix_acc, info, stability)
-            checks = _py_checks(a, t, info)
+            # No stability data for this field: emit exactly what we always
+            # have — just the isinstance check (baseline never asserted
+            # `is not None`; that stays exclusive to rule-guided checks).
+            if info:
+                checks = _py_checks(a, t, info)
+            else:
+                checks = [f"assert isinstance({a}, {t})"]
             _emit_guarded(lines, guards, checks, base)
 
     return lines
