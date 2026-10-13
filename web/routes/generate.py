@@ -15,6 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from core.generator import generate_test_cases
 from core.live_fetcher import fetch_api_response, LiveFetchError
+from core.stability_check import (
+    apply_stability_to_assertions,
+    compare_responses,
+    stability_skipped,
+)
 from web.limiter import limiter, LIMIT_GENERATE
 from core.database import save_session, save_test_cases
 
@@ -56,6 +61,7 @@ def _cases_for_db(result: Dict[str, Any]) -> list:
             "payload": {
                 "grounded": assertion.get("grounded", False),
                 "grounding": assertion.get("grounding"),
+                "stability": assertion.get("stability"),
             },
             "severity": assertion.get("severity"),
             "grounded": assertion.get("grounded", False),
@@ -68,6 +74,10 @@ class GenerateRequest(BaseModel):
     method: str = Field(default="GET", description="HTTP method")
     auto_fetch: bool = Field(
         default=False, description="Automatically fetch sample response from the live API"
+    )
+    stability_check: bool = Field(
+        default=False,
+        description="Call the endpoint 3 times (GET only) to detect fields that change",
     )
     headers: Optional[Dict[str, Any]] = Field(
         default=None, description="Optional request headers"
@@ -107,6 +117,7 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
     endpoint = payload.endpoint.strip()
     method = payload.method.upper()
     sample_response = payload.sample_response
+    stability = None
 
     if payload.auto_fetch:
         try:
@@ -125,6 +136,33 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
         except LiveFetchError as e:
             raise HTTPException(status_code=502, detail=str(e))
 
+        if payload.stability_check:
+            if method == "GET":
+                try:
+                    # Two more calls through the same SSRF-guarded path. A
+                    # repeat-call failure never breaks generation.
+                    extra = [
+                        fetch_api_response(
+                            endpoint=endpoint,
+                            method=method,
+                            headers=headers,
+                            request_body=payload.request_body,
+                        )
+                        for _ in range(2)
+                    ]
+                    stability = compare_responses([sample_response, *extra])
+                except LiveFetchError:
+                    stability = stability_skipped(
+                        "A repeat call failed, so stability couldn't be checked."
+                    )
+            else:
+                stability = stability_skipped(
+                    "Stability check runs on GET only, so repeat calls can't "
+                    "create or change data."
+                )
+    elif payload.stability_check:
+        stability = stability_skipped("Turn on auto-fetch to run the stability check.")
+
     result = generate_test_cases(
         endpoint=endpoint,
         method=method,
@@ -137,6 +175,14 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
     # expose the fetched response so exporters can build schema-driven assertions
     if sample_response is not None:
         result["sample_response"] = sample_response
+
+    # Tag assertions with per-field stability; the strip summarises the rest.
+    # apply_stability_to_assertions pops the internal raw-values key, so only
+    # masked previews ever leave the server.
+    if stability is not None:
+        if stability.get("ran"):
+            apply_stability_to_assertions(result.get("assertions") or [], stability)
+        result["stability"] = stability
 
     # Persist the session for history (best-effort; never breaks generation)
     try:
