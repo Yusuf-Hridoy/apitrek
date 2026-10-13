@@ -122,9 +122,11 @@ def test_nested_and_list_paths_match_grounding_convention():
     assert out["fields"]["address.geo.lat"]["kind"] == "value_changes"
     assert "items.sku" in out["fields"]
     assert out["fields"]["items.sku"]["status"] == "stable"
-    # Parent objects are not entries; children carry the change.
-    assert "address" not in out["fields"]
-    assert "address.geo" not in out["fields"]
+    # Object parents are recorded (presence/type tracked) but a child-driven
+    # change never makes the parent itself dynamic — the child carries it.
+    assert out["fields"]["address"]["status"] == "stable"
+    assert out["fields"]["address"]["kind"] == "same"
+    assert out["fields"]["address.geo"]["status"] == "stable"
 
 
 def test_top_level_list_response():
@@ -571,6 +573,216 @@ def test_full_generators_still_valid_with_stability():
     assert parsed["info"]["schema"].endswith("v2.1.0/collection.json")
     item0_script = "\n".join(parsed["item"][0]["event"][0]["script"]["exec"])
     assert 'hasOwnProperty("discount")' in item0_script
+
+
+# --- Review fixes -----------------------------------------------------------
+
+def test_sometimes_null_object_is_type_changes():
+    """The Fix 1 reproduce case: an object that is null in some calls was
+    present in every call, so it is a type change — not missing_sometimes."""
+    out = compare_responses([{"u": {"x": 1}}, {"u": None}, {"u": {"x": 1}}])
+    entry = out["fields"]["u"]
+    assert entry["status"] == "flaky"
+    assert entry["kind"] == "type_changes"
+    assert entry["types"] == ["object", "null", "object"]
+
+
+def test_child_of_sometimes_null_object_carries_parent_condition():
+    out = compare_responses([{"u": {"x": 1}}, {"u": None}, {"u": {"x": 1}}])
+    child = out["fields"]["u.x"]
+    assert child["status"] == "flaky"
+    # Not an independent missing_sometimes: it is missing only when the
+    # parent is null, so exports guard on the parent.
+    assert child["kind"] == "parent_sometimes_null"
+    assert child["values"][1] == "(missing)"
+    assert child["types"][1] == "missing"
+
+
+def test_summary_counts_exclude_stable_object_parents():
+    out = compare_responses(
+        [{"u": {"x": 1}, "id": 1}, {"u": {"x": 1}, "id": 1}, {"u": {"x": 1}, "id": 1}]
+    )
+    # u is a container (object) -> excluded; u.x and id are leaves -> counted.
+    assert out["summary"] == {"stable": 2, "dynamic": 0, "flaky": 0}
+
+    flaky_out = compare_responses([{"u": {"x": 1}}, {"u": None}, {"u": {"x": 1}}])
+    # The flaky object parent DOES count (its own shape changes)...
+    assert flaky_out["summary"]["flaky"] == 2  # u + u.x
+    stable_out = compare_responses(
+        [{"u": {"x": 1}, "n": 5}, {"u": {"x": 2}, "n": 5}, {"u": {"x": 3}, "n": 5}]
+    )
+    # ...and a child-driven change shows up on the child only: u (container)
+    # is excluded, u.x is dynamic, n is stable.
+    assert stable_out["summary"] == {"stable": 1, "dynamic": 1, "flaky": 0}
+
+
+class _FakeResponse:
+    """Minimal stand-in for requests.Response: only .json() is used."""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def _assert_generated_checks_pass_all_calls(calls, rules):
+    """The feature's promise, tested directly: build the pytest assertion
+    body from call 1 + the stability comparison, then execute it against
+    EVERY observed response — none may fail."""
+    stability = compare_responses(calls)
+    lines = pytest_assertions(calls[0], rules, stability)
+    body = textwrap.dedent("\n".join(lines))
+    src = "def _check(response):\n" + "\n".join(
+        "    " + line for line in body.splitlines()
+    ) + "\n"
+    ast.parse(src)
+    namespace = {}
+    exec(compile(src, "<generated>", "exec"), namespace)
+    for i, call in enumerate(calls):
+        try:
+            namespace["_check"](_FakeResponse(call))
+        except AssertionError as exc:
+            raise AssertionError(
+                f"generated check failed on call {i + 1}: {exc}\n---\n{body}"
+            )
+
+
+@pytest.mark.parametrize("calls,rules", [
+    # missing top-level field
+    ([{"id": 1, "note": "a"}, {"id": 1}, {"id": 1, "note": "a"}],
+     ['has "note"']),
+    # sometimes-null value
+    ([{"d": 0.1}, {"d": None}, {"d": 0.2}],
+     ['has "d"']),
+    # sometimes-null object (the Fix 1 reproduce case); the child key is
+    # longer than "u" so the rule matches the child path, exercising the
+    # parent guard
+    ([{"u": {"token": "a"}}, {"u": None}, {"u": {"token": "a"}}],
+     ['u.token should be a string', 'has "u"']),
+    # object parent missing entirely in one call
+    ([{"u": {"token": "a"}}, {}, {"u": {"token": "a"}}],
+     ['u.token should be a string']),
+    # list empty in some calls
+    ([{"items": [{"sku": "a"}]}, {"items": []}, {"items": [{"sku": "a"}]}],
+     ['has "sku"']),
+    # top-level list empty in some calls
+    ([[{"id": 1}], [], [{"id": 1}]],
+     ['has "id"']),
+    # int/float mix across calls
+    ([{"p": 1}, {"p": 1.5}, {"p": 2}],
+     ['has "p"']),
+])
+def test_generated_checks_pass_for_every_observed_response(calls, rules):
+    _assert_generated_checks_pass_all_calls(calls, rules)
+
+
+def test_export_guards_for_nullable_object_parent():
+    calls = [{"u": {"token": "a"}}, {"u": None}, {"u": {"token": "a"}}]
+    stability = compare_responses(calls)
+    lines = pytest_assertions(calls[0], ['u.token should be a string', 'has "u"'], stability)
+    text = "\n".join(lines)
+    # Parent check accepts null; child checks sit behind a null guard.
+    assert 'assert data["u"] is None or isinstance(data["u"], dict)' in text
+    assert 'if data["u"] is not None:' in text
+    ast.parse(textwrap.dedent(text))
+
+    js_lines = postman_assertions(calls[0], ['u.token should be a string', 'has "u"'], stability)
+    js_text = "\n".join(js_lines)
+    assert 'if (jsonData["u"] !== null && jsonData["u"] !== undefined) {' in js_text
+    assert '["object"].includes(typeof jsonData["u"])' in js_text
+
+
+# Byte-identity contract: with no stability data (None or ran:False), output
+# must match commit 8f1f241 (before the stability feature) exactly. These
+# expected outputs were generated from that version of assertion_translator.py
+# and are frozen here so future changes can't silently drift.
+GOLDEN_8F1F241 = {
+    "object_root": {
+        "sample": {"id": 1, "name": "x", "price": 9.5, "active": True},
+        "rules": ['body has field "price"', "id is a number"],
+        "pytest": [
+            '    data = response.json()',
+            '    # Validation: body has field "price"',
+            '    assert data["price"] is not None',
+            '    assert isinstance(data["price"], (int, float))',
+            '    # Validation: id is a number',
+            '    assert data["id"] is not None',
+            '    assert isinstance(data["id"], int)',
+            '    assert isinstance(data["name"], str)',
+            '    assert isinstance(data["active"], bool)',
+        ],
+        "postman": [
+            '    var jsonData = pm.response.json();',
+            "    pm.expect(jsonData[\"price\"]).to.be.a('number');",
+            "    pm.expect(jsonData[\"id\"]).to.be.a('number');",
+            '    pm.expect(jsonData).to.have.property("name");',
+            '    pm.expect(jsonData).to.have.property("active");',
+        ],
+    },
+    "list_root": {
+        "sample": [{"id": 1, "name": "a"}],
+        "rules": ['has "id"'],
+        "pytest": [
+            '    data = response.json()',
+            '    assert isinstance(data, list) and len(data) > 0',
+            '    item = data[0]',
+            '    # Validation: has "id"',
+            '    assert item["id"] is not None',
+            '    assert isinstance(item["id"], int)',
+            '    assert isinstance(item["name"], str)',
+        ],
+        "postman": [
+            '    var jsonData = pm.response.json();',
+            "    pm.expect(jsonData).to.be.an('array');",
+            "    pm.expect(jsonData[0][\"id\"]).to.be.a('number');",
+            '    pm.expect(jsonData).to.have.property("name");',
+        ],
+    },
+    "nested": {
+        "sample": {"user": {"id": 1, "address": {"geo": {"lat": 1.0, "lng": 2.0}}}},
+        "rules": ["address.geo.lat should be a float", 'has "user"'],
+        "pytest": [
+            '    data = response.json()',
+            '    # Validation: address.geo.lat should be a float',
+            '    assert data["user"]["address"] is not None',
+            '    assert isinstance(data["user"]["address"], dict)',
+            '    # Validation: has "user"',
+            '    assert data["user"] is not None',
+            '    assert isinstance(data["user"], dict)',
+        ],
+        "postman": [
+            '    var jsonData = pm.response.json();',
+            "    pm.expect(jsonData[\"user\"][\"address\"]).to.be.an('object');",
+            "    pm.expect(jsonData[\"user\"]).to.be.an('object');",
+        ],
+    },
+    "list_of_objects": {
+        "sample": {"items": [{"sku": "a", "qty": 2}], "total": 3},
+        "rules": ["items.sku should be a string"],
+        "pytest": [
+            '    data = response.json()',
+            '    # Validation: items.sku should be a string',
+            '    assert data["items"] is not None',
+            '    assert isinstance(data["items"], list)',
+            '    assert isinstance(data["total"], int)',
+        ],
+        "postman": [
+            '    var jsonData = pm.response.json();',
+            "    pm.expect(jsonData[\"items\"]).to.be.an('array');",
+            '    pm.expect(jsonData).to.have.property("total");',
+        ],
+    },
+}
+
+
+@pytest.mark.parametrize("name", list(GOLDEN_8F1F241))
+def test_exports_byte_identical_to_8f1f241_without_stability(name):
+    golden = GOLDEN_8F1F241[name]
+    sample, rules = golden["sample"], golden["rules"]
+    for stability in (None, {"ran": False, "reason": "skipped for this test"}):
+        assert pytest_assertions(sample, rules, stability) == golden["pytest"]
+        assert postman_assertions(sample, rules, stability) == golden["postman"]
 
 
 if __name__ == "__main__":
