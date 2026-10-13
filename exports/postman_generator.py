@@ -75,7 +75,7 @@ def _allowed_statuses(status_code: Any) -> Optional[List[int]]:
     return None
 
 
-def _build_test_script(expected: Dict[str, Any], sample: Any) -> List[str]:
+def _build_test_script(expected: Dict[str, Any], sample: Any, stability: Any = None) -> List[str]:
     """Generate Postman test-script lines from expected assertions."""
     lines: List[str] = []
     status_code = expected.get("status_code")
@@ -99,7 +99,7 @@ def _build_test_script(expected: Dict[str, Any], sample: Any) -> List[str]:
 
     validation_rules = expected.get("validation_rules")
     if validation_rules:
-        assertion_lines = postman_assertions(sample, validation_rules)
+        assertion_lines = postman_assertions(sample, validation_rules, stability)
         if assertion_lines:
             lines.append(f'pm.test("Response schema is valid", function () {{')
             lines.extend(assertion_lines)
@@ -109,7 +109,7 @@ def _build_test_script(expected: Dict[str, Any], sample: Any) -> List[str]:
     return lines
 
 
-def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method: str, sample: Any) -> Dict[str, Any]:
+def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method: str, sample: Any, stability: Any = None) -> Dict[str, Any]:
     """Build a Postman item from a single test case."""
     title = case.get("title", "Untitled")
     case_id = case.get("id", "")
@@ -124,7 +124,7 @@ def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method
     request_body = request_info.get("body")
 
     expected = case.get("expected", {}) or {}
-    script_lines = _build_test_script(expected, sample)
+    script_lines = _build_test_script(expected, sample, stability)
 
     item: Dict[str, Any] = {
         "name": f"{case_id} - {title}" if case_id else title,
@@ -154,13 +154,13 @@ def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method
     return item
 
 
-def _build_assertion_item(assertion: Dict[str, Any], endpoint: str, method: str, sample: Any) -> Dict[str, Any]:
+def _build_assertion_item(assertion: Dict[str, Any], endpoint: str, method: str, sample: Any, stability: Any = None) -> Dict[str, Any]:
     """Build a Postman item from an assertion rule."""
     rule = assertion.get("rule", "Assertion")
     category = assertion.get("category", "general")
     severity = assertion.get("severity", "medium")
 
-    assertion_lines = postman_assertions(sample, [rule])
+    assertion_lines = postman_assertions(sample, [rule], stability)
     # The translator's generic <500 fallback (emitted when the sample response
     # has no schema to check against) is the same fake-pass pattern as a
     # fabricated oneOf/200 — only real field checks count as groundable.
@@ -234,17 +234,18 @@ def generate_postman_collection(
     edge_cases = test_data.get("edge_cases") or []
     assertions = test_data.get("assertions") or []
     sample = test_data.get("sample_response")
+    stability = test_data.get("stability")
 
     items: List[Dict[str, Any]] = []
 
     for case in positive_cases:
-        items.append(_build_case_item(case, endpoint, method, sample))
+        items.append(_build_case_item(case, endpoint, method, sample, stability))
     for case in negative_cases:
-        items.append(_build_case_item(case, endpoint, method, sample))
+        items.append(_build_case_item(case, endpoint, method, sample, stability))
     for case in edge_cases:
-        items.append(_build_case_item(case, endpoint, method, sample))
+        items.append(_build_case_item(case, endpoint, method, sample, stability))
     for assertion in assertions:
-        items.append(_build_assertion_item(assertion, endpoint, method, sample))
+        items.append(_build_assertion_item(assertion, endpoint, method, sample, stability))
 
     if not items:
         # Minimal fallback collection with a smoke-test request

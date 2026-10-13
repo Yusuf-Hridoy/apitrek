@@ -6,7 +6,15 @@ on fields that exist in it, with the type read from the real value. A rule can
 refine a real field; a rule that maps to no real field is skipped (commented),
 never turned into an assertion. This mirrors the grounding system: no field in
 the response -> no assertion.
+
+Stability awareness (optional ``stability`` argument, the result of
+core.stability_check.compare_responses): only fields observed as FLAKY get
+tolerant code — a field that is missing sometimes is checked only when
+present, a field whose type changes accepts every observed type, and a list
+that is empty sometimes guards its item access. Stable and dynamic fields
+generate exactly the same code as before, and exports never compare values.
 """
+import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -89,7 +97,121 @@ def _match_rule(rule: str, fields: Dict[FieldPath, Any]) -> Optional[FieldPath]:
     return None
 
 
-def pytest_assertions(response: Any, rules: List[str]) -> List[str]:
+# --- stability integration -------------------------------------------------
+
+# JSON type name -> Python type for isinstance tuples (observed types only).
+_PYTYPE_FROM_JSON = {
+    "string": "str",
+    "integer": "int",
+    "number": "float",
+    "boolean": "bool",
+    "array": "list",
+    "object": "dict",
+}
+
+# JSON type name -> JS typeof name.
+_JSTYPEOF_FROM_JSON = {
+    "string": "string",
+    "integer": "number",
+    "number": "number",
+    "boolean": "boolean",
+    "array": "object",
+    "object": "object",
+}
+
+
+def _flaky_for(dotted: str, stability: Optional[dict]) -> Optional[dict]:
+    """Stability entry for a dotted path, only when it is flaky."""
+    if not stability or not stability.get("ran"):
+        return None
+    info = (stability.get("fields") or {}).get(dotted)
+    if info and info.get("status") == "flaky":
+        return info
+    return None
+
+
+def _root_list_info(stability: Optional[dict]) -> Optional[dict]:
+    """Flakiness entry for a top-level list response, when observed."""
+    if not stability or not stability.get("ran"):
+        return None
+    info = stability.get("root_list")
+    if info and info.get("status") == "flaky":
+        return info
+    return None
+
+
+def _dotted(path: FieldPath) -> str:
+    return ".".join(k for k, _ in path)
+
+
+def _py_guard_segments(
+    path: FieldPath, prefix_acc: str, info: Optional[dict], stability: Optional[dict]
+) -> List[Tuple[str, str]]:
+    """(comment, if-line) guards for a path, outermost first. Ancestor lists
+    that were empty in some calls guard their item access; a missing-sometimes
+    field is checked only when present."""
+    guards: List[Tuple[str, str]] = []
+    for i, (key, is_list) in enumerate(path):
+        if not is_list:
+            continue
+        seg_info = _flaky_for(_dotted(path[: i + 1]), stability)
+        if seg_info and seg_info.get("kind") == "empty_sometimes":
+            acc = _list_accessor(path[: i + 1], prefix_acc)
+            guards.append(("# list empty in some calls", f"if {acc}:"))
+    if info and info.get("kind") == "missing_sometimes":
+        parent = _accessor(path[:-1], prefix_acc) if len(path) > 1 else prefix_acc
+        guards.append(
+            (
+                "# optional: missing in some calls (stability check)",
+                f"if {json.dumps(path[-1][0])} in {parent}:",
+            )
+        )
+    return guards
+
+
+def _list_accessor(path: FieldPath, prefix: str) -> str:
+    """Accessor for a list itself (no trailing [0] on the last segment):
+    (('items', True),) -> item["items"]; (('a',False),('items',True)) -> data["a"]["items"]."""
+    acc = prefix
+    last = len(path) - 1
+    for i, (key, is_list) in enumerate(path):
+        acc += f'["{key}"]'
+        if is_list and i != last:
+            acc += "[0]"
+    return acc
+
+
+def _py_checks(acc: str, py_type: Optional[str], info: Optional[dict]) -> List[str]:
+    """The assertion lines for one field, tolerant when the field was flaky."""
+    if info and info.get("kind") == "type_changes":
+        observed = [
+            t for t in (info.get("types") or []) if t not in ("null", "missing")
+        ]
+        py_types = list(dict.fromkeys(_PYTYPE_FROM_JSON[t] for t in observed if t in _PYTYPE_FROM_JSON))
+        if not py_types:
+            return [f"assert {acc} is not None"]
+        tup = py_types[0] if len(py_types) == 1 else "(" + ", ".join(py_types) + ")"
+        if "null" in (info.get("types") or []):
+            return [f"assert {acc} is None or isinstance({acc}, {tup})"]
+        return [f"assert isinstance({acc}, {tup})"]
+    checks = [f"assert {acc} is not None"]
+    if py_type:
+        checks.append(f"assert isinstance({acc}, {py_type})")
+    return checks
+
+
+def _emit_guarded(
+    lines: List[str], guards: List[Tuple[str, str]], checks: List[str], indent: str
+) -> None:
+    for comment, if_line in guards:
+        lines.append(f"{indent}{comment}")
+        lines.append(f"{indent}{if_line}")
+        indent += "    "
+    for check in checks:
+        lines.append(f"{indent}{check}")
+
+
+def pytest_assertions(response: Any, rules: List[str], stability: Optional[dict] = None) -> List[str]:
     """Real pytest asserts from the fetched response + rules. Never asserts a
     field that isn't in the response."""
     if response is None or not isinstance(response, (dict, list)):
@@ -98,12 +220,23 @@ def pytest_assertions(response: Any, rules: List[str]) -> List[str]:
     root_is_list = isinstance(response, list)
     lines = ["    data = response.json()"]
     if root_is_list:
-        lines.append("    assert isinstance(data, list) and len(data) > 0")
+        root_info = _root_list_info(stability)
+        root_guard = bool(root_info and root_info.get("kind") == "empty_sometimes")
+        if root_guard:
+            # The list was empty in some calls: don't require an item.
+            lines.append("    assert isinstance(data, list)")
+            lines.append("    if data:")
+            base = "        "
+        else:
+            lines.append("    assert isinstance(data, list) and len(data) > 0")
+            base = "    "
         sample = response[0] if response else {}
         fields = _flatten(sample)
-        lines.append("    item = data[0]")
+        lines.append(base + "item = data[0]")
         prefix_acc = "item"
     else:
+        root_guard = False
+        base = "    "
         fields = _flatten(response)
         prefix_acc = "data"
 
@@ -119,15 +252,16 @@ def pytest_assertions(response: Any, rules: List[str]) -> List[str]:
         # rule can't inject a line of code into the generated test function.
         rule_comment = str(rule).replace("\r", " ").replace("\n", " ")
         if not path or path in used:
-            lines.append(f"    # (no matching response field) {rule_comment}")
+            lines.append(f"{base}# (no matching response field) {rule_comment}")
             continue
         used.add(path)
         a = acc_for(path)
         t = _pytype(fields[path])
-        lines.append(f"    # Validation: {rule_comment}")
-        lines.append(f"    assert {a} is not None")
-        if t:
-            lines.append(f"    assert isinstance({a}, {t})")
+        info = _flaky_for(_dotted(path), stability)
+        lines.append(f"{base}# Validation: {rule_comment}")
+        guards = _py_guard_segments(path, prefix_acc, info, stability)
+        checks = _py_checks(a, t, info)
+        _emit_guarded(lines, guards, checks, base)
 
     # 2) schema baseline for top-level real fields not already covered
     for path, v in fields.items():
@@ -136,23 +270,89 @@ def pytest_assertions(response: Any, rules: List[str]) -> List[str]:
         t = _pytype(v)
         if t:
             a = acc_for(path)
-            lines.append(f"    assert isinstance({a}, {t})")
+            info = _flaky_for(_dotted(path), stability)
+            guards = _py_guard_segments(path, prefix_acc, info, stability)
+            checks = _py_checks(a, t, info)
+            _emit_guarded(lines, guards, checks, base)
 
     return lines
 
 
-def postman_assertions(response: Any, rules: List[str]) -> List[str]:
+def _js_guard_segments(
+    path: FieldPath, prefix: str, info: Optional[dict], stability: Optional[dict]
+) -> List[str]:
+    """if (...) guard lines for a JS path (see _py_guard_segments)."""
+    guards: List[str] = []
+    for i, (key, is_list) in enumerate(path):
+        if not is_list:
+            continue
+        seg_info = _flaky_for(_dotted(path[: i + 1]), stability)
+        if seg_info and seg_info.get("kind") == "empty_sometimes":
+            guards.append(f"if ({_list_accessor(path[: i + 1], prefix)}.length) {{")
+    if info and info.get("kind") == "missing_sometimes":
+        parent = _js_accessor(path[:-1], prefix) if len(path) > 1 else prefix
+        guards.append(f"if ({parent}.hasOwnProperty({json.dumps(path[-1][0])})) {{")
+    return guards
+
+
+def _js_checks(acc: str, js_type: Optional[str], info: Optional[dict]) -> List[str]:
+    """The pm.expect lines for one field, tolerant when the field was flaky."""
+    if info and info.get("kind") == "type_changes":
+        observed = [
+            t for t in (info.get("types") or []) if t not in ("null", "missing")
+        ]
+        js_types = list(
+            dict.fromkeys(_JSTYPEOF_FROM_JSON[t] for t in observed if t in _JSTYPEOF_FROM_JSON)
+        )
+        if not js_types:
+            return [f"pm.expect({acc}).to.exist;"]
+        type_list = ", ".join(json.dumps(t) for t in js_types)
+        nullable = "null" in (info.get("types") or [])
+        cond = f"[{type_list}].includes(typeof {acc})"
+        if nullable:
+            return [f"pm.expect({acc} === null || {cond}).to.be.true;"]
+        return [f"pm.expect({cond}).to.be.true;"]
+    if not js_type:
+        return []
+    if js_type in ("array", "object"):
+        return [f"pm.expect({acc}).to.be.an('{js_type}');"]
+    return [f"pm.expect({acc}).to.be.a('{js_type}');"]
+
+
+def _emit_js_guarded(
+    lines: List[str], guards: List[str], checks: List[str], indent: str
+) -> None:
+    for guard in guards:
+        lines.append(f"{indent}{guard}")
+        indent += "    "
+    for check in checks:
+        lines.append(f"{indent}{check}")
+    for _ in guards:
+        indent = indent[:-4]
+        lines.append(f"{indent}}}")
+
+
+def postman_assertions(response: Any, rules: List[str], stability: Optional[dict] = None) -> List[str]:
     """Real Postman pm.expect checks from the fetched response + rules."""
     if response is None or not isinstance(response, (dict, list)):
         return ["    pm.expect(pm.response.code).to.be.below(500);"]
 
     lines = ["    var jsonData = pm.response.json();"]
+    root_guard = False
     if isinstance(response, list):
         lines.append("    pm.expect(jsonData).to.be.an('array');")
+        root_info = _root_list_info(stability)
+        if root_info and root_info.get("kind") == "empty_sometimes":
+            lines.append("    if (jsonData.length) {")
+            base = "        "
+            root_guard = True
+        else:
+            base = "    "
         sample = response[0] if response else {}
         fields = _flatten(sample)
         prefix = "jsonData[0]"
     else:
+        base = "    "
         fields = _flatten(response)
         prefix = "jsonData"
 
@@ -167,16 +367,19 @@ def postman_assertions(response: Any, rules: List[str]) -> List[str]:
         used.add(path)
         a = acc_for(path)
         t = _jstype(fields[path])
-        if t:
-            if t in ("array", "object"):
-                lines.append(f"    pm.expect({a}).to.be.an('{t}');")
-            else:
-                lines.append(f"    pm.expect({a}).to.be.a('{t}');")
+        info = _flaky_for(_dotted(path), stability)
+        checks = _js_checks(a, t, info)
+        _emit_js_guarded(lines, _js_guard_segments(path, prefix, info, stability), checks, base)
 
     for path, v in fields.items():
         if len(path) != 1 or path in used:
             continue
         t = _jstype(v)
         if t:
-            lines.append(f'    pm.expect(jsonData).to.have.property("{path[0][0]}");')
+            info = _flaky_for(_dotted(path), stability)
+            checks = [f'pm.expect(jsonData).to.have.property("{path[0][0]}");']
+            _emit_js_guarded(lines, _js_guard_segments(path, prefix, info, stability), checks, base)
+
+    if root_guard:
+        lines.append("    }")
     return lines
