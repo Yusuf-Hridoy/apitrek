@@ -144,12 +144,31 @@ def _dotted(path: FieldPath) -> str:
     return ".".join(k for k, _ in path)
 
 
+def _nullable_object_segments(
+    path: FieldPath, stability: Optional[dict]
+) -> List[int]:
+    """Indices i such that path[:i] is an ancestor that was null in some
+    calls (object type_changes with null observed) — children must be
+    guarded on it."""
+    nullable: List[int] = []
+    for i in range(1, len(path)):
+        seg_info = _flaky_for(_dotted(path[:i]), stability)
+        if (
+            seg_info
+            and seg_info.get("kind") == "type_changes"
+            and "null" in (seg_info.get("types") or [])
+        ):
+            nullable.append(i)
+    return nullable
+
+
 def _py_guard_segments(
     path: FieldPath, prefix_acc: str, info: Optional[dict], stability: Optional[dict]
 ) -> List[Tuple[str, str]]:
     """(comment, if-line) guards for a path, outermost first. Ancestor lists
-    that were empty in some calls guard their item access; a missing-sometimes
-    field is checked only when present."""
+    that were empty in some calls guard their item access; an ancestor that
+    was null in some calls guards its children; a missing-sometimes field is
+    checked only when present (and every missing ancestor is present too)."""
     guards: List[Tuple[str, str]] = []
     for i, (key, is_list) in enumerate(path):
         if not is_list:
@@ -158,12 +177,22 @@ def _py_guard_segments(
         if seg_info and seg_info.get("kind") == "empty_sometimes":
             acc = _list_accessor(path[: i + 1], prefix_acc)
             guards.append(("# list empty in some calls", f"if {acc}:"))
+    for i in _nullable_object_segments(path, stability):
+        acc = _accessor(path[:i], prefix_acc)
+        guards.append(("# null in some calls (stability check)", f"if {acc} is not None:"))
     if info and info.get("kind") == "missing_sometimes":
+        conds = []
+        for i in range(1, len(path)):
+            seg_info = _flaky_for(_dotted(path[:i]), stability)
+            if seg_info and seg_info.get("kind") == "missing_sometimes":
+                seg_parent = _accessor(path[: i - 1], prefix_acc) if i > 1 else prefix_acc
+                conds.append(f"{json.dumps(path[i - 1][0])} in {seg_parent}")
         parent = _accessor(path[:-1], prefix_acc) if len(path) > 1 else prefix_acc
+        conds.append(f"{json.dumps(path[-1][0])} in {parent}")
         guards.append(
             (
                 "# optional: missing in some calls (stability check)",
-                f"if {json.dumps(path[-1][0])} in {parent}:",
+                f"if {' and '.join(conds)}:",
             )
         )
     return guards
@@ -289,9 +318,19 @@ def _js_guard_segments(
         seg_info = _flaky_for(_dotted(path[: i + 1]), stability)
         if seg_info and seg_info.get("kind") == "empty_sometimes":
             guards.append(f"if ({_list_accessor(path[: i + 1], prefix)}.length) {{")
+    for i in _nullable_object_segments(path, stability):
+        acc = _js_accessor(path[:i], prefix)
+        guards.append(f"if ({acc} !== null && {acc} !== undefined) {{")
     if info and info.get("kind") == "missing_sometimes":
+        conds = []
+        for i in range(1, len(path)):
+            seg_info = _flaky_for(_dotted(path[:i]), stability)
+            if seg_info and seg_info.get("kind") == "missing_sometimes":
+                seg_parent = _js_accessor(path[: i - 1], prefix) if i > 1 else prefix
+                conds.append(f"{seg_parent}.hasOwnProperty({json.dumps(path[i - 1][0])})")
         parent = _js_accessor(path[:-1], prefix) if len(path) > 1 else prefix
-        guards.append(f"if ({parent}.hasOwnProperty({json.dumps(path[-1][0])})) {{")
+        conds.append(f"{parent}.hasOwnProperty({json.dumps(path[-1][0])})")
+        guards.append(f"if ({' && '.join(conds)}) {{")
     return guards
 
 
