@@ -10,6 +10,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const exportBtn = document.getElementById('exportBtn');
     const autoFetchCheckbox = document.getElementById('autoFetch');
     const sampleResponseGroup = document.getElementById('sampleResponseGroup');
+    const stabilityCheckbox = document.getElementById('stabilityCheck');
+    const stabilityLabel = document.getElementById('stabilityCheckLabel');
+    const methodSelect = document.getElementById('method');
     const sampleBtn = document.getElementById('sampleBtn');
 
     const lists = {
@@ -136,10 +139,33 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // The stability check needs a live GET: it re-calls the endpoint twice
+    // more, which for non-GET methods could create or change data.
+    function updateStabilityAvailability() {
+        if (!stabilityCheckbox || !stabilityLabel) return;
+        const autoOn = autoFetchCheckbox ? autoFetchCheckbox.checked : false;
+        const isGet = methodSelect ? methodSelect.value === 'GET' : false;
+        const enabled = autoOn && isGet;
+        stabilityCheckbox.disabled = !enabled;
+        stabilityLabel.classList.toggle('disabled', !enabled);
+        if (!autoOn) {
+            stabilityLabel.dataset.tooltip = 'Needs auto-fetch';
+        } else if (!isGet) {
+            stabilityLabel.dataset.tooltip = 'GET only';
+        } else {
+            stabilityLabel.dataset.tooltip = 'Calls the endpoint 3 times to catch values that change (GET only)';
+        }
+    }
+    updateStabilityAvailability();
+
     if (autoFetchCheckbox && sampleResponseGroup) {
         autoFetchCheckbox.addEventListener('change', () => {
             sampleResponseGroup.classList.toggle('hidden', autoFetchCheckbox.checked);
+            updateStabilityAvailability();
         });
+    }
+    if (methodSelect) {
+        methodSelect.addEventListener('change', updateStabilityAvailability);
     }
 
     form.addEventListener('submit', async (e) => {
@@ -243,6 +269,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     endpoint,
                     method,
                     auto_fetch: autoFetch,
+                    stability_check: stabilityCheckbox && !stabilityCheckbox.disabled
+                        ? stabilityCheckbox.checked
+                        : false,
                     headers,
                     request_body: requestBody,
                     sample_response: sampleResponse,
@@ -280,6 +309,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('endpoint').value = 'https://jsonplaceholder.typicode.com/posts/1';
             document.getElementById('method').value = 'GET';
             if (autoFetchCheckbox) autoFetchCheckbox.checked = true;
+            if (stabilityCheckbox) stabilityCheckbox.checked = true;
+            updateStabilityAvailability();
             if (sampleResponseGroup) sampleResponseGroup.classList.remove('hidden');
             // Clear any stale advanced-field values so the sample runs clean
             ['headers', 'requestBody', 'sampleResponse'].forEach((id) => {
@@ -1504,6 +1535,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     severity: tc.severity || 'medium',
                     grounded: stored.grounded === true || tc.grounded === true,
                     grounding: stored.grounding || null,
+                    stability: stored.stability || null,
                 });
                 return;
             }
@@ -1730,6 +1762,29 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function renderStabilityStrip(container, stability, assertions) {
+        if (!stability) {
+            container.innerHTML = '';
+            container.classList.add('hidden');
+            return;
+        }
+        container.classList.remove('hidden');
+        if (!stability.ran) {
+            container.innerHTML = `<p class="stab-skip">Stability check skipped: ${escapeHtml(stability.reason || '')}</p>`;
+            return;
+        }
+        const s = stability.summary || { stable: 0, dynamic: 0, flaky: 0 };
+        const flakyAssertions = (assertions || [])
+            .filter((a) => a.stability && a.stability.status === 'flaky').length;
+        let pills = `<span class="pill pill--neutral">${s.stable} fields stable</span>` +
+            `<span class="pill pill--neutral">${s.dynamic} fields change each call</span>`;
+        if (s.flaky > 0) pills += `<span class="pill pill--warn">${s.flaky} fields change shape</span>`;
+        if (flakyAssertions > 0) pills += `<span class="pill pill--warn">${flakyAssertions} assertions flaky</span>`;
+        container.innerHTML =
+            `<div class="stab-strip"><span class="stab-strip-title">Stability check &middot; GET called ${stability.calls} times</span>` +
+            `<div class="stab-pills">${pills}</div></div>`;
+    }
+
     function renderResults(data) {
         caseCards = [];
         executionSummary.classList.add('hidden');
@@ -1748,9 +1803,20 @@ document.addEventListener('DOMContentLoaded', () => {
             legend.className = 'ground-legend';
             legend.innerHTML = '<span class="ground-verified">✓ verified</span> = checked against the real fetched response &middot; <span class="ground-unverified">⚠ unverified</span> = model-generated, confirm before trusting &middot; click a badge to see why';
             lists.assertions.appendChild(legend);
+            if (data.stability && data.stability.ran) {
+                const stabLegend = document.createElement('p');
+                stabLegend.className = 'ground-legend';
+                stabLegend.innerHTML = 'stable = same on all 3 calls &middot; <span class="stab-legend-flaky">&#9889; flaky</span> = would break a test on some runs &middot; click a tag to see each call';
+                lists.assertions.appendChild(stabLegend);
+            }
         }
         renderDegradedBanner(data);
         refreshFunctionalScorecard();
+        // Stability strip goes directly under the scorecard. The summary is
+        // not persisted (History restores show per-assertion tags only).
+        const scorecardEl = document.getElementById('scorecard');
+        const stabSlot = scorecardSlot(resultsSection, 'stabilityStrip', scorecardEl || undefined);
+        renderStabilityStrip(stabSlot, data.stability, assertions);
         updateResultTabCounts({
             All: positive.length + negative.length + edge.length + assertions.length,
             Positive: positive.length,
@@ -1877,16 +1943,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 aria-expanded="false" aria-controls="${evId}"
                 title="Click to see why">${grounded ? '✓ verified' : '⚠ unverified'} <span class="ground-caret">▾</span></button>`;
 
+            // Stability tag mirrors the grounding badge: sibling panel,
+            // lazy render, stopPropagation. Only dynamic/flaky are clickable.
+            const stab = a.stability;
+            const stabEvId = `stab-ev-${idx}`;
+            let stabTag = '';
+            if (stab && stab.status === 'flaky') {
+                stabTag = `<button type="button" class="stab-tag stab-flaky" aria-expanded="false" aria-controls="${stabEvId}" title="Click to see each call">&#9889; flaky <span class="ground-caret">▾</span></button>`;
+            } else if (stab && stab.status === 'dynamic') {
+                stabTag = `<button type="button" class="stab-tag stab-dynamic" aria-expanded="false" aria-controls="${stabEvId}" title="Click to see each call">changes each call <span class="ground-caret">▾</span></button>`;
+            } else if (stab && stab.status === 'stable') {
+                stabTag = '<span class="stab-tag stab-stable">stable</span>';
+            }
+
             el.innerHTML = `
                 <div class="case-row">
                     <span class="status-badge pending">Pending</span>
-                    ${groundBadge}
+                    ${groundBadge}${stabTag ? ' ' + stabTag : ''}
                     <span class="case-title">${escapeHtml(a.rule || 'Untitled assertion')}</span>
                     <span class="case-row-tags">${categoryTag}${severityTag}</span>
                     <button type="button" class="btn-run">Run</button>
                     <span class="chevron">&#9662;</span>
                 </div>
                 <div class="ground-evidence ${grounded ? 'is-ok' : 'is-warn'} hidden" id="${evId}" role="region"></div>
+                <div class="stab-evidence ${stab && stab.status === 'flaky' ? 'is-warn' : 'is-neutral'} hidden" id="${stabEvId}" role="region"></div>
                 <div class="case-body hidden">
                     <div class="case-details hidden"></div>
                 </div>
@@ -1910,7 +1990,60 @@ document.addEventListener('DOMContentLoaded', () => {
                 badge.setAttribute('aria-expanded', String(opening));
                 badge.querySelector('.ground-caret').textContent = opening ? '▴' : '▾';
             });
+
+            const stabTagEl = el.querySelector('button.stab-tag');
+            const stabPanel = el.querySelector('.stab-evidence');
+            if (stabTagEl && stabPanel) {
+                stabTagEl.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const opening = stabPanel.classList.contains('hidden');
+                    if (opening && !stabPanel.dataset.rendered) {
+                        stabPanel.innerHTML = renderStabilityEvidence(stab);
+                        stabPanel.dataset.rendered = '1';
+                    }
+                    stabPanel.classList.toggle('hidden', !opening);
+                    stabTagEl.setAttribute('aria-expanded', String(opening));
+                    stabTagEl.querySelector('.ground-caret').textContent = opening ? '▴' : '▾';
+                });
+            }
         });
+    }
+
+    // Per-call evidence for a stability tag. Values are masked server-side
+    // and escaped here — they come from a third-party API response.
+    function renderStabilityEvidence(stab) {
+        const titles = {
+            value_changes: 'Value changed between calls',
+            order_changes: 'Order changed between calls',
+            missing_sometimes: 'Missing in some calls',
+            type_changes: 'Type changed between calls',
+            empty_sometimes: 'List empty in some calls',
+            pins_changing_value: 'Rule expects one exact value, but it changes',
+        };
+        const notes = {
+            value_changes: "Apitrek's tests check that this field exists and its type, so this won't break them. Just don't assert its exact value.",
+            order_changes: "Apitrek's tests check that this field exists and its type, so this won't break them. Just don't assert its exact value.",
+            pins_changing_value: "This rule names one exact value, but the value changed on every call. Apitrek's checks only verify the field and type, so it passes here — a test that compares the exact value would fail.",
+            missing_sometimes: "Exported tests only check this field when it's present.",
+            type_changes: 'Exported tests accept each type that was observed.',
+            empty_sometimes: "Exported tests only check list items when the list isn't empty.",
+        };
+        const kind = stab.kind;
+        const values = Array.isArray(stab.values) ? stab.values : [];
+        const showTypes = kind === 'type_changes' && Array.isArray(stab.types);
+        const head = showTypes
+            ? '<tr><th></th><th>Value</th><th>Type</th></tr>'
+            : '<tr><th></th><th>Value</th></tr>';
+        const rows = values.map((v, i) => {
+            let cells = `<td>Call ${i + 1}</td><td>${escapeHtml(String(v))}</td>`;
+            if (showTypes) cells += `<td>${escapeHtml(String(stab.types[i] != null ? stab.types[i] : '—'))}</td>`;
+            return `<tr>${cells}</tr>`;
+        }).join('');
+        const title = titles[kind] || 'Changed between calls';
+        const note = notes[kind] || '';
+        return `<p class="ev-title">${escapeHtml(title)}</p>` +
+            `<table class="stab-table">${head}${rows}</table>` +
+            (note ? `<p class="ev-detail">${escapeHtml(note)}</p>` : '');
     }
 
     // Evidence shown under an assertion row when its badge is clicked. Every

@@ -1204,6 +1204,41 @@ button.ground-badge:focus-visible { outline: 2px solid var(--interactive); outli
   overflow-wrap: anywhere; }
 .ground-evidence .ev-detail { color: var(--text-secondary); margin-top: 0.35rem; }
 
+/* --- Stability check (tags reuse the evidence panel pattern) --- */
+.stab-tag { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 20px;
+  white-space: nowrap; }
+button.stab-tag { border: none; cursor: pointer; font-family: inherit; line-height: inherit; }
+button.stab-tag:focus-visible { outline: 2px solid var(--interactive); outline-offset: 2px; }
+.stab-stable, .stab-dynamic { color: var(--text-secondary); background: var(--neutral-subtle); }
+.stab-flaky { color: var(--warn); background: var(--warn-subtle); }
+.stab-legend-flaky { color: var(--warn); }
+
+.stab-evidence { margin: 0 0.6rem 0.6rem; padding: 0.6rem 0.75rem;
+  border-radius: 8px; font-size: 0.8rem; line-height: 1.5; }
+.stab-evidence.is-warn { background: var(--warn-subtle); }
+.stab-evidence.is-neutral { background: var(--neutral-subtle); }
+.stab-evidence .ev-title { font-weight: 600; margin-bottom: 0.25rem; }
+.stab-evidence.is-warn .ev-title { color: var(--warn); }
+.stab-evidence.is-neutral .ev-title { color: var(--text-secondary); }
+.stab-evidence .ev-detail { color: var(--text-secondary); margin-top: 0.35rem; }
+.stab-evidence .stab-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+.stab-evidence .stab-table th { text-align: left; font-weight: 500; color: var(--text-secondary);
+  padding: 2px 8px 2px 0; }
+.stab-evidence .stab-table td { text-align: left; padding: 2px 8px 2px 0;
+  color: var(--text-secondary); overflow-wrap: anywhere; }
+.stab-evidence .stab-table td:last-child { font-family: var(--font-mono);
+  color: var(--text-primary); }
+
+.stab-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+  margin: 0 0 0.75rem; }
+.stab-strip-title { font-size: 0.8rem; font-weight: 600; color: var(--text-primary); }
+.stab-pills { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.stab-skip { font-size: 0.8rem; color: var(--text-secondary); margin: 0 0 0.75rem; }
+
+.checkbox-label.disabled { opacity: 0.5; cursor: not-allowed; }
+.checkbox-label.disabled input[type="checkbox"] { cursor: not-allowed; }
+.security-mode-active .stability { display: none; }
+
 .ground-verified {
     color: var(--ok);
     background: var(--ok-subtle);
