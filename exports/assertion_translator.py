@@ -210,19 +210,25 @@ def _list_accessor(path: FieldPath, prefix: str) -> str:
     return acc
 
 
+# Flaky kinds whose observed types drive the tolerant type check.
+_TYPE_AWARE_KINDS = ("type_changes", "missing_sometimes", "parent_sometimes_null")
+
+
 def _py_checks(acc: str, py_type: Optional[str], info: Optional[dict]) -> List[str]:
     """The assertion lines for one field, tolerant when the field was flaky."""
-    if info and info.get("kind") == "type_changes":
-        observed = [
-            t for t in (info.get("types") or []) if t not in ("null", "missing")
-        ]
+    if info and info.get("kind") in _TYPE_AWARE_KINDS:
+        types = info.get("types") or []
+        observed = [t for t in types if t not in ("null", "missing")]
         py_types = list(dict.fromkeys(_PYTYPE_FROM_JSON[t] for t in observed if t in _PYTYPE_FROM_JSON))
         if not py_types:
             return [f"assert {acc} is not None"]
         tup = py_types[0] if len(py_types) == 1 else "(" + ", ".join(py_types) + ")"
-        if "null" in (info.get("types") or []):
+        if "null" in types:
             return [f"assert {acc} is None or isinstance({acc}, {tup})"]
-        return [f"assert isinstance({acc}, {tup})"]
+        if info.get("kind") == "type_changes":
+            return [f"assert isinstance({acc}, {tup})"]
+        # missing_sometimes / parent_sometimes_null without null: exactly what
+        # we always emitted for presence-guarded fields.
     checks = [f"assert {acc} is not None"]
     if py_type:
         checks.append(f"assert isinstance({acc}, {py_type})")
@@ -342,9 +348,10 @@ def _js_guard_segments(
 
 def _js_checks(acc: str, js_type: Optional[str], info: Optional[dict]) -> List[str]:
     """The pm.expect lines for one field, tolerant when the field was flaky."""
-    if info and info.get("kind") == "type_changes":
+    if info and info.get("kind") in _TYPE_AWARE_KINDS:
+        types = info.get("types") or []
         observed = [
-            t for t in (info.get("types") or []) if t not in ("null", "missing")
+            t for t in types if t not in ("null", "missing")
         ]
         js_types = list(
             dict.fromkeys(_JSTYPEOF_FROM_JSON[t] for t in observed if t in _JSTYPEOF_FROM_JSON)
@@ -352,11 +359,14 @@ def _js_checks(acc: str, js_type: Optional[str], info: Optional[dict]) -> List[s
         if not js_types:
             return [f"pm.expect({acc}).to.exist;"]
         type_list = ", ".join(json.dumps(t) for t in js_types)
-        nullable = "null" in (info.get("types") or [])
+        nullable = "null" in types
         cond = f"[{type_list}].includes(typeof {acc})"
         if nullable:
             return [f"pm.expect({acc} === null || {cond}).to.be.true;"]
-        return [f"pm.expect({cond}).to.be.true;"]
+        if info.get("kind") == "type_changes":
+            return [f"pm.expect({cond}).to.be.true;"]
+        # missing_sometimes / parent_sometimes_null without null: the plain
+        # type check below, as before.
     if not js_type:
         return []
     if js_type in ("array", "object"):
