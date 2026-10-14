@@ -79,11 +79,11 @@ def rerun_session(session_id: int) -> Dict[str, Any]:
         body=session.get("body"),
     )
     try:
-        save_execution_results(session_id, results)
+        save_execution_results(session_id, results["results"])
     except Exception:
         pass  # history persistence is best-effort
 
-    return {"results": results, "summary": _build_summary(results)}
+    return {"results": results["results"], "summary": _build_summary(results["results"])}
 
 
 @router.delete("/history/sessions/{session_id}", status_code=204)

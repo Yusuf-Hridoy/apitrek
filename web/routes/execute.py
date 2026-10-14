@@ -44,16 +44,29 @@ class ExecuteSingleRequest(BaseModel):
     )
 
 
+def _result_outcome(result: Dict[str, Any]) -> str:
+    if result.get("outcome"):
+        return result["outcome"]
+    return "passed" if result.get("passed") else "failed"
+
+
 def _build_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     total = len(results)
-    passed = sum(1 for r in results if r.get("passed"))
-    failed = total - passed
+    outcomes = [_result_outcome(r) for r in results]
+    passed = outcomes.count("passed")
+    failed = outcomes.count("failed")
+    needs_review = outcomes.count("needs_review")
+    not_run = outcomes.count("not_run")
+    decided = passed + failed
     duration_ms = sum(r.get("duration_ms", 0) for r in results)
-    pass_rate = f"{round(passed / total * 100)}%" if total else "0%"
+    pass_rate = f"{round(passed / decided * 100)}%" if decided else "0%"
     return {
         "total": total,
         "passed": passed,
         "failed": failed,
+        "needs_review": needs_review,
+        "not_run": not_run,
+        "executed_count": total - not_run,
         "duration_ms": duration_ms,
         "pass_rate": pass_rate,
     }
@@ -78,7 +91,7 @@ def execute_tests(request: Request, payload: ExecuteRequest) -> Dict[str, Any]:
         test_cases = [tc for tc in test_cases if str(tc.get("id", "")) in wanted]
 
     try:
-        results = execute_test_suite(
+        suite = execute_test_suite(
             test_cases,
             endpoint=endpoint,
             method=payload.method.upper(),
@@ -90,11 +103,11 @@ def execute_tests(request: Request, payload: ExecuteRequest) -> Dict[str, Any]:
 
     if payload.session_id is not None:
         try:
-            save_execution_results(payload.session_id, results)
+            save_execution_results(payload.session_id, suite["results"])
         except Exception:
             pass  # history persistence is best-effort
 
-    return {"results": results, "summary": _build_summary(results)}
+    return {"results": suite["results"], "summary": _build_summary(suite["results"])}
 
 
 @router.post("/execute-single")

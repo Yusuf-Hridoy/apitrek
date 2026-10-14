@@ -8,8 +8,9 @@ request at all gets a generic per-category fallback mutation, and the notes
 say so. Responses are validated against expected status codes (which may be a
 list) and validation rules.
 
-Honesty: notes about what was sent are info, never checks, and a rule the
-runner cannot verify mechanically is never reported as passed.
+Honesty: notes about what was sent are info, never checks; a rule the runner
+cannot verify mechanically is not a pass; and a request the HTTP client or the
+SSRF guard refused is "not run", not a failure of the API.
 """
 import re
 import time
@@ -31,6 +32,15 @@ _TYPE_WORDS = {
     "array": list,
     "object": dict,
 }
+
+# The HTTP client refused to send the request at all (bad header, bad URL) —
+# the API was never tested, so this is "not run", never a failure.
+_CLIENT_REFUSAL_ERRORS = (
+    requests.exceptions.InvalidHeader,
+    requests.exceptions.InvalidURL,
+    requests.exceptions.MissingSchema,
+    requests.exceptions.InvalidSchema,
+)
 
 
 def _get_expected_status(test_case: Dict[str, Any]) -> Any:
@@ -80,8 +90,8 @@ def _run_assertion_rule(
 
     Understands status-code rules ("status code is 200") and quoted field
     checks ("field 'price' is present", "'id' must be an integer"). Rules that
-    cannot be checked mechanically are flagged verifiable=False (and never
-    passed=True) so the UI can distinguish them from real passes.
+    cannot be checked mechanically are flagged verifiable=False so the UI can
+    distinguish them from real passes — they never count as passed checks.
     """
     lowered = rule.lower()
 
@@ -191,16 +201,16 @@ def _build_request(
         for key in list(req_headers):
             if "authorization" in key.lower():
                 req_headers[key] = "Bearer invalid-token-000"
-                notes.append(f"Replaced {key} with an invalid token")
+                notes.append(f"replaced {key} with an invalid token")
                 mutated = True
         if isinstance(req_body, dict) and req_body:
             removed = next(iter(req_body))
             req_body = {k: v for k, v in req_body.items() if k != removed}
-            notes.append(f"Removed required field '{removed}' from body")
+            notes.append(f"removed required field '{removed}' from the body")
             mutated = True
         if not mutated:
             req_headers["Content-Type"] = "text/plain"
-            notes.append("Sent wrong Content-Type: text/plain")
+            notes.append("sent wrong Content-Type: text/plain")
 
     elif category == "edge":
         if isinstance(req_body, dict) and req_body:
@@ -210,9 +220,9 @@ def _build_request(
             for i, key in enumerate(list(req_body)):
                 choice = i % len(boundary_values)
                 req_body[key] = boundary_values[choice]
-                notes.append(f"Field '{key}' {labels[choice]}")
+                notes.append(f"field '{key}' {labels[choice]}")
         else:
-            notes.append("No request body to mutate; sent as-is")
+            notes.append("no request body to mutate; sent as-is")
 
     return url, req_method, req_headers, req_body, notes
 
@@ -244,8 +254,9 @@ def execute_test_case(
     """
     Execute a single test case against the live API.
 
-    Returns a structured result dict; never raises — request errors are
-    captured in error_message with passed=False.
+    Returns a structured result dict; never raises. Each result carries an
+    ``outcome`` (passed / failed / needs_review / not_run) alongside the
+    boolean ``passed`` kept for compatibility.
     """
     category = test_case.get("category", "positive")
     expected_status = _get_expected_status(test_case)
@@ -254,6 +265,9 @@ def execute_test_case(
     error_message: Optional[str] = None
     actual_status = 0
     preview = ""
+    outcome = "failed"
+    url = endpoint
+    req_method = (method or "GET").upper()
 
     start = time.perf_counter()
     try:
@@ -312,7 +326,16 @@ def execute_test_case(
             })
 
     except BlockedURLError as e:
-        error_message = f"Request blocked: {e}"
+        # The SSRF guard blocked the URL before anything was sent.
+        outcome = "not_run"
+        error_message = f"Not sent: the SSRF guard blocked this URL, so the API was never tested. ({e})"
+    except _CLIENT_REFUSAL_ERRORS as e:
+        # The HTTP client refused to send (bad header, bad URL scheme).
+        outcome = "not_run"
+        error_message = (
+            f"Not sent: the HTTP client refused the request ({e}), "
+            f"so the API was never tested."
+        )
     except requests.exceptions.Timeout:
         error_message = f"Request timed out after {REQUEST_TIMEOUT_SECONDS}s"
     except requests.exceptions.RequestException as e:
@@ -322,21 +345,27 @@ def execute_test_case(
 
     duration_ms = int((time.perf_counter() - start) * 1000)
 
-    if error_message is not None:
-        passed = False
-    else:
+    if error_message is None:
         # Info entries (what was sent) are not checks and never count.
         checks = [a for a in assertion_results if a.get("kind") != "info"]
-        if checks:
-            passed = all(a["passed"] for a in checks)
+        verifiable_checks = [a for a in checks if a.get("verifiable", True)]
+        unverifiable = [a for a in checks if a.get("verifiable") is False]
+        if any(not a["passed"] for a in verifiable_checks):
+            outcome = "failed"
+        elif verifiable_checks:
+            outcome = "passed"
+        elif unverifiable:
+            # Everything checkable-by-nothing: honest "needs review".
+            outcome = "needs_review"
         else:
-            # Nothing to validate: a successful response counts as a pass
-            passed = 200 <= actual_status < 400
+            # No checks at all: a successful response counts as a pass.
+            outcome = "passed" if 200 <= actual_status < 400 else "failed"
 
     return {
         "test_case_id": str(test_case.get("id", "")),
         "title": test_case.get("title") or test_case.get("rule") or "Untitled",
-        "passed": passed,
+        "passed": outcome == "passed",
+        "outcome": outcome,
         "expected_status": expected_status,
         "actual_status": actual_status,
         "actual_response_preview": preview,
@@ -353,9 +382,30 @@ def execute_test_suite(
     method: str,
     headers: Optional[Dict[str, Any]] = None,
     body: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
-    """Execute a list of test cases sequentially and return all results."""
-    return [
+) -> Dict[str, Any]:
+    """Execute a list of test cases sequentially.
+
+    Returns the results plus an outcome summary. pass_rate counts only
+    passed vs failed — needs_review and not_run are honest non-answers,
+    not failures.
+    """
+    results = [
         execute_test_case(tc, endpoint, method, headers=headers, body=body)
         for tc in test_cases
     ]
+    passed = sum(1 for r in results if r["outcome"] == "passed")
+    failed = sum(1 for r in results if r["outcome"] == "failed")
+    needs_review = sum(1 for r in results if r["outcome"] == "needs_review")
+    not_run = sum(1 for r in results if r["outcome"] == "not_run")
+    decided = passed + failed
+    return {
+        "results": results,
+        "total": len(results),
+        "passed": passed,
+        "failed": failed,
+        "needs_review": needs_review,
+        "not_run": not_run,
+        "executed_count": len(results) - not_run,
+        "duration_ms": sum(r.get("duration_ms", 0) for r in results),
+        "pass_rate": f"{round(passed / decided * 100)}%" if decided else "0%",
+    }

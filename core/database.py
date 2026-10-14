@@ -79,6 +79,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_results_session ON execution_results(session_id);
         """)
         _migrate_add_column(conn, "test_cases", "case_ref", "TEXT")
+        _migrate_add_column(conn, "execution_results", "outcome", "TEXT")
 
 
 def _migrate_add_column(
@@ -363,6 +364,7 @@ def save_execution_results(session_id: int, results: List[Dict[str, Any]]) -> in
             r.get("error_message"),
             r.get("duration_ms"),
             now,
+            r.get("outcome"),
         )
         for r in results
     ]
@@ -373,8 +375,9 @@ def save_execution_results(session_id: int, results: List[Dict[str, Any]]) -> in
             """
             INSERT INTO execution_results (session_id, test_case_id, passed,
                                            actual_status, actual_response,
-                                           error_message, duration_ms, executed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                           error_message, duration_ms, executed_at,
+                                           outcome)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -431,7 +434,15 @@ def get_session(session_id: int) -> Optional[Dict[str, Any]]:
         return case
 
     session["test_cases"] = [_decode_case(row) for row in test_cases]
-    session["execution_results"] = [dict(row) for row in results]
+    restored_results = []
+    for row in results:
+        result = dict(row)
+        # Rows saved before the outcome column existed fall back to the
+        # boolean: passed -> "passed", anything else -> "failed".
+        if not result.get("outcome"):
+            result["outcome"] = "passed" if result.get("passed") else "failed"
+        restored_results.append(result)
+    session["execution_results"] = restored_results
     return session
 
 
