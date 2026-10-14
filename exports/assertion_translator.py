@@ -432,7 +432,9 @@ def postman_assertions(response: Any, rules: List[str], stability: Optional[dict
         t = _jstype(v)
         if t:
             info = _flaky_for(_dotted(path), stability)
-            checks = [f'pm.expect(jsonData).to.have.property("{path[0][0]}");']
+            # A list-root response checks the first item (prefix is
+            # "jsonData[0]"), never the array itself.
+            checks = [f'pm.expect({prefix}).to.have.property("{path[0][0]}");']
             _emit_js_guarded(lines, _js_guard_segments(path, prefix, info, stability), checks, base)
 
     if root_guard:
