@@ -629,7 +629,8 @@ class _FakeResponse:
 def _assert_generated_checks_pass_all_calls(calls, rules):
     """The feature's promise, tested directly: build the pytest assertion
     body from call 1 + the stability comparison, then execute it against
-    EVERY observed response — none may fail."""
+    EVERY observed response — none may fail. Returns the joined Postman
+    script so callers can assert on it too (Node-free check)."""
     stability = compare_responses(calls)
     lines = pytest_assertions(calls[0], rules, stability)
     body = textwrap.dedent("\n".join(lines))
@@ -646,6 +647,7 @@ def _assert_generated_checks_pass_all_calls(calls, rules):
             raise AssertionError(
                 f"generated check failed on call {i + 1}: {exc}\n---\n{body}"
             )
+    return "\n".join(postman_assertions(calls[0], rules, stability))
 
 
 @pytest.mark.parametrize("calls,rules", [
@@ -693,10 +695,62 @@ def test_export_guards_for_nullable_object_parent():
     assert '["object"].includes(typeof jsonData["u"])' in js_text
 
 
+# --- Round 2 -----------------------------------------------------------------
+
+def test_missing_and_null_field_passes_all_calls():
+    """Fix 1: a field that is missing in one call and null in another is
+    missing_sometimes with null among the observed types — the exported
+    checks must accept all three shapes."""
+    calls = [{"s": "a"}, {"s": None}, {}]
+    stability = compare_responses(calls)
+    entry = stability["fields"]["s"]
+    assert entry["status"] == "flaky"
+    assert entry["kind"] == "missing_sometimes"
+    assert entry["types"] == ["string", "null", "missing"]
+
+    pm_text = _assert_generated_checks_pass_all_calls(calls, ['"s" is string'])
+
+    py_text = "\n".join(pytest_assertions(calls[0], ['"s" is string'], stability))
+    assert 'if "s" in data:' in py_text
+    assert 'assert data["s"] is None or isinstance(data["s"], str)' in py_text
+
+    assert 'if (jsonData.hasOwnProperty("s")) {' in pm_text
+    assert 'pm.expect(jsonData["s"] === null || ["string"].includes(typeof jsonData["s"])).to.be.true;' in pm_text
+
+
+def test_list_root_with_nullable_object_postman_targets_first_item():
+    """Fix 2 case: top-level list where a nested object is null in some
+    calls. Pytest must pass every call; Postman must check the first item
+    of the array, never the array itself."""
+    calls = [
+        [{"id": 1, "m": {"z": 1}}],
+        [{"id": 2, "m": None}],
+        [{"id": 3, "m": {"z": 2}}],
+    ]
+    pm_text = _assert_generated_checks_pass_all_calls(calls, ['"m.z" present'])
+    assert "jsonData[0]" in pm_text
+    assert "pm.expect(jsonData).to.have.property" not in pm_text
+
+
+def test_list_root_postman_without_stability_targets_first_item():
+    """Fix 2 case with no stability data: the pre-existing bug emitted
+    pm.expect(jsonData).to.have.property(...) against the array, which
+    always fails. Baseline checks must target jsonData[0]."""
+    sample = [{"id": 1, "name": "a"}]
+    pm_text = "\n".join(postman_assertions(sample, ['has "id"'], None))
+    assert "pm.expect(jsonData).to.be.an('array');" in pm_text
+    assert 'pm.expect(jsonData[0]).to.have.property("name");' in pm_text
+    assert "pm.expect(jsonData).to.have.property" not in pm_text
+
+
 # Byte-identity contract: with no stability data (None or ran:False), output
 # must match commit 8f1f241 (before the stability feature) exactly. These
 # expected outputs were generated from that version of assertion_translator.py
 # and are frozen here so future changes can't silently drift.
+# Exception: the list_root postman baseline was `pm.expect(jsonData).to.have.
+# property("name")`, which always fails against an array — round 2 fixed it to
+# check jsonData[0] (see test_list_root_postman_*), so that one line differs
+# from 8f1f241 on purpose.
 GOLDEN_8F1F241 = {
     "object_root": {
         "sample": {"id": 1, "name": "x", "price": 9.5, "active": True},
@@ -736,7 +790,7 @@ GOLDEN_8F1F241 = {
             '    var jsonData = pm.response.json();',
             "    pm.expect(jsonData).to.be.an('array');",
             "    pm.expect(jsonData[0][\"id\"]).to.be.a('number');",
-            '    pm.expect(jsonData).to.have.property("name");',
+            '    pm.expect(jsonData[0]).to.have.property("name");',
         ],
     },
     "nested": {
