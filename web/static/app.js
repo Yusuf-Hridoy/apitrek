@@ -33,20 +33,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${n} ${n === 1 ? one : many}`;
     }
 
-    function renderScorecard(container, { coverage, verified, needsReview, failed, total, sentence, totalNoun = ['assertion', 'assertions'] }) {
+    function renderScorecard(container, { coverage, verified, needsReview, failed, total, sentence, totalNoun = ['assertion', 'assertions'], labels = { ok: 'verified', bad: 'failed', ring: 'coverage' } }) {
         const pct = (coverage === null || coverage === undefined) ? null : Math.round(coverage);
         const pills = pct === null
             ? `<span class="pill pill--neutral">Not run yet</span>` +
               `<span class="pill pill--neutral">${plural(total, ...totalNoun)}</span>`
-            : `<span class="pill pill--ok">${verified} verified</span>` +
+            : `<span class="pill pill--ok">${verified} ${labels.ok}</span>` +
               `<span class="pill pill--warn">${needsReview} needs review</span>` +
-              `<span class="pill pill--bad">${failed} failed</span>` +
+              `<span class="pill pill--bad">${failed} ${labels.bad}</span>` +
               `<span class="pill pill--neutral">${total} total</span>`;
         container.innerHTML = `
             <div class="scorecard${pct === null ? ' scorecard--pending' : ''}">
                 <div class="scorecard-ring" style="${pct === null ? 'background:var(--bg-inset)' : `--pct:${pct}`}">
                     <span class="scorecard-pct">${pct === null ? '&mdash;' : pct + '%'}</span>
-                    <span class="scorecard-pct-label">coverage</span>
+                    <span class="scorecard-pct-label">${labels.ring}</span>
                 </div>
                 <div class="scorecard-body">
                     <div class="scorecard-pills">${pills}</div>
@@ -1035,6 +1035,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 failed: vulnerableCount,
                 total: totalFindings,
                 sentence: scanSentence,
+                totalNoun: ['test', 'tests'],
+                labels: { ok: 'secure', bad: 'vulnerable', ring: 'decided' },
             }
         );
 
