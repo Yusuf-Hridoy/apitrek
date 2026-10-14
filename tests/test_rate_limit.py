@@ -1,6 +1,7 @@
 """
 Unit tests for slowapi rate limiting on expensive routes.
 """
+import ipaddress
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +14,27 @@ from fastapi.testclient import TestClient
 from limits import parse
 
 from web.app import app
+
+
+# These route tests target public-looking URLs whose hosts don't need to
+# resolve — stub the guard's DNS lookup so the suite runs fully offline.
+# Named hosts get a public IP; literal IPs still go through real resolution
+# (no DNS involved) so blocked-target tests keep working. Kept module-local
+# on purpose: tests/test_url_guard.py must keep testing real resolution
+# behavior, including private/loopback blocking.
+@pytest.fixture(autouse=True)
+def public_dns(monkeypatch):
+    from core import url_guard
+    real_resolve = url_guard._resolve_all_ips
+
+    def _resolve(host, port):
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            return ["93.184.216.34"]
+        return real_resolve(host, port)
+
+    monkeypatch.setattr("core.url_guard._resolve_all_ips", _resolve)
 
 
 # Keep tests fast by using very restrictive limits. The route handlers still
