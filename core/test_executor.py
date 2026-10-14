@@ -12,6 +12,7 @@ Honesty: notes about what was sent are info, never checks; a rule the runner
 cannot verify mechanically is not a pass; and a request the HTTP client or the
 SSRF guard refused is "not run", not a failure of the API.
 """
+import copy
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -182,16 +183,18 @@ def _build_request(
 
         if "body" in tc_request:
             # The case body wins even when it is None or {} — deliberate.
-            req_body = tc_request["body"]
+            # Deep-copy: mutating it (fallback edge cases) must never change
+            # the stored test case or the form body shared across the suite.
+            req_body = copy.deepcopy(tc_request["body"])
         else:
-            req_body = body
+            req_body = copy.deepcopy(body)
         return url, req_method, req_headers, req_body, []
 
     # --- fallback: no scenario request in this case ---
     url = endpoint
     req_method = (method or "GET").upper()
     req_headers = dict(headers or {})
-    req_body = body
+    req_body = copy.deepcopy(body)
 
     category = test_case.get("category", "positive")
     notes: List[str] = []

@@ -366,6 +366,74 @@ def test_info_entry_describes_request_without_leaking_values(mock_request):
     assert result["outcome"] == "passed"
 
 
+# --- Fix 1 (review): one case must never corrupt the body of the next -------
+
+@patch("core.test_executor.safe_request")
+def test_edge_fallback_does_not_corrupt_form_body_or_later_cases(mock_request):
+    """The reproduce case: an edge fallback mutates its body in place. The
+    mutation must land on a copy — the next case and the form body itself
+    stay intact."""
+    mock_request.return_value = _mock_response(status=200)
+    cases = [
+        {"title": "edge without request", "category": "edge",
+         "expected": {"status_code": 200}},
+        {"title": "positive after it", "category": "positive",
+         "request": {"headers": {}}, "expected": {"status_code": 200}},
+    ]
+    form_body = {"name": "morpheus", "job": "leader"}
+    execute_test_suite(cases, ENDPOINT, "POST", {}, form_body)
+
+    sent = [call.kwargs["json"] for call in mock_request.call_args_list]
+    # The edge case mutated its own copy; the positive case got the real body.
+    assert sent[0] == {"name": "", "job": "A" * 10000}
+    assert sent[1] == {"name": "morpheus", "job": "leader"}
+    assert form_body == {"name": "morpheus", "job": "leader"}
+
+
+@patch("core.test_executor.safe_request")
+def test_edge_fallback_does_not_modify_the_shared_body(mock_request):
+    """Re-running the same edge fallback must mutate the same way every time
+    — the shared form body (and any stored case) is never modified."""
+    mock_request.return_value = _mock_response(status=200)
+    case = {"id": "TC-E", "title": "edge", "category": "edge"}
+    body = {"a": 1, "b": 2}
+    execute_test_case(case, ENDPOINT, "POST", body=body)
+    execute_test_case(case, ENDPOINT, "POST", body=body)
+    sent = [call.kwargs["json"] for call in mock_request.call_args_list]
+    assert sent[0] == sent[1] == {"a": "", "b": "A" * 10000}
+    assert body == {"a": 1, "b": 2}
+
+
+@patch("core.test_executor.safe_request")
+def test_case_request_body_is_never_modified(mock_request):
+    """A case's own request body is deep-copied too — re-runs send the
+    original body every time."""
+    mock_request.return_value = _mock_response(status=200)
+    case = {"id": "TC-E", "title": "edge", "category": "edge",
+            "request": {"body": {"a": 1, "b": 2}}}
+    execute_test_case(case, ENDPOINT, "POST")
+    execute_test_case(case, ENDPOINT, "POST")
+    sent = [call.kwargs["json"] for call in mock_request.call_args_list]
+    assert sent[0] == sent[1] == {"a": 1, "b": 2}
+    assert case["request"]["body"] == {"a": 1, "b": 2}
+
+
+@patch("core.test_executor.safe_request")
+def test_negative_fallback_then_positive_body_is_intact(mock_request):
+    mock_request.return_value = _mock_response(status=400)
+    negative = {"id": "TC-N", "title": "neg", "category": "negative",
+                "expected": {"status_code": 400}}
+    positive = {"id": "TC-P", "title": "pos", "category": "positive",
+                "request": {"headers": {}}}
+    form_body = {"name": "x", "price": 10}
+    execute_test_suite([negative, positive], ENDPOINT, "POST", {}, form_body)
+    sent = [call.kwargs["json"] for call in mock_request.call_args_list]
+    # Fallback removed 'name' from its own copy only.
+    assert sent[0] == {"price": 10}
+    assert sent[1] == {"name": "x", "price": 10}
+    assert form_body == {"name": "x", "price": 10}
+
+
 @patch("core.test_executor.safe_request")
 def test_suite_summary_excludes_needs_review_and_not_run(mock_request):
     cases = [
