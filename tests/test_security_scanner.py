@@ -565,5 +565,26 @@ def test_not_applicable_excluded_from_counts(client):
     assert all("API7" not in (f.get("owasp_category") or "") for f in data["findings"])
 
 
+# --- /security/plan: accurate request count without sending any -------------
+
+def test_plan_endpoint_counts_requests_without_sending(client):
+    payload = {"endpoint": "https://x.com/api/users", "method": "POST"}
+    with patch("core.security_scanner.safe_request") as mock_safe_request:
+        res = client.post("/api/security/plan", json=payload)
+    assert res.status_code == 200
+    # POST, no numeric ID, no URL param: API2 x3 + API5 x1 + API6 (15+2) + API8 x2.
+    assert res.json()["request_count"] == 23
+    # Planning must never touch the network.
+    assert mock_safe_request.call_count == 0
+
+
+def test_plan_respects_selected_categories(client):
+    payload = {"endpoint": "https://x.com/api/users", "method": "GET",
+               "categories": ["API6:2023"]}
+    res = client.post("/api/security/plan", json=payload)
+    assert res.status_code == 200
+    assert res.json()["request_count"] == 15  # only the rate-limit burst
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

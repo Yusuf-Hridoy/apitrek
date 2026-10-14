@@ -78,6 +78,41 @@ async def list_owasp_categories() -> List[Dict[str, str]]:
     ]
 
 
+@router.post("/security/plan")
+def security_plan(payload: ScanRequest) -> Dict[str, Any]:
+    """Count the requests a scan WOULD send, without sending any.
+
+    Lets the UI warn accurately before a write-method scan: the rate-limit
+    probe repeats 15 times, idempotency twice, everything else once.
+    """
+    if not payload.endpoint or not payload.endpoint.strip():
+        raise HTTPException(status_code=422, detail="Endpoint is required.")
+
+    endpoint = payload.endpoint.strip()
+    try:
+        validate_public_url(endpoint)
+    except BlockedURLError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        tests = generate_security_tests(
+            endpoint=endpoint,
+            method=payload.method.upper(),
+            headers=payload.headers,
+            body=payload.body,
+            sample_response=payload.sample_response,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate security tests: {e}")
+
+    if payload.categories:
+        wanted = set(payload.categories)
+        tests = [t for t in tests if t["owasp_category"].split(" - ")[0] in wanted]
+
+    request_count = sum(int(t.get("payload", {}).get("repeat", 1)) for t in tests)
+    return {"request_count": request_count}
+
+
 @router.post("/security/scan")
 @limiter.limit(LIMIT_SECURITY_SCAN)
 def security_scan(request: Request, payload: ScanRequest) -> Dict[str, Any]:

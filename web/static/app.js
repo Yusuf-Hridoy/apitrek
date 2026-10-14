@@ -338,7 +338,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 // Defer so the checked state is committed before the scan reads
                 // selectedCategories() — a same-tick click can read stale boxes.
-                setTimeout(() => runScanBtn.click(), 0);  // single scan code path — no duplicate fetch
+                // The sample targets a safe public read-only endpoint, so it
+                // skips the write-method confirmation panel.
+                setTimeout(() => {
+                    scanConfirmBypass = true;
+                    runScanBtn.click();
+                }, 0);  // single scan code path — no duplicate fetch
             } else if (form.requestSubmit) {
                 form.requestSubmit();
             } else {
@@ -1183,26 +1188,67 @@ document.addEventListener('DOMContentLoaded', () => {
         tab.addEventListener('click', () => setSeverity(tab.dataset.sev));
     });
 
-    runScanBtn.addEventListener('click', async () => {
-        hideError();
-        const endpoint = document.getElementById('endpoint').value.trim();
-        if (!endpoint) {
-            showError('Please enter an API endpoint to scan.');
-            return;
-        }
-        const categories = selectedCategories();
-        if (!categories.length) {
-            showError('Select at least one OWASP category to scan.');
-            return;
-        }
+    // Write-method scans (POST/PUT/PATCH/DELETE) repeat real requests — the
+    // rate-limit probe fires 15 times, idempotency twice — which can change
+    // data on the target. Confirm first, with an accurate count from the
+    // backend. Set by the sample flow, which targets a safe public endpoint.
+    let scanConfirmBypass = false;
 
-        const { headers, body } = getRequestExtras();
-        let sampleResponse = null;
-        const sampleRaw = document.getElementById('sampleResponse').value.trim();
-        if (sampleRaw) {
-            try { sampleResponse = JSON.parse(sampleRaw); } catch (err) { /* optional field */ }
+    function scanConfirmSlot() {
+        let el = document.getElementById('scanConfirmPanel');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'scanConfirmPanel';
+            el.className = 'scan-confirm-panel hidden';
+            runScanBtn.before(el);
         }
+        return el;
+    }
 
+    async function showScanConfirmPanel(payload) {
+        const slot = scanConfirmSlot();
+        // Accurate count from the backend; vague fallback if it's unavailable.
+        let countText = 'about 25';
+        try {
+            const res = await fetch('/api/security/plan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (res.ok) {
+                const plan = await res.json().catch(() => ({}));
+                if (typeof plan.request_count === 'number') {
+                    countText = `about ${plan.request_count}`;
+                }
+            }
+        } catch (err) { /* plan failed — keep the fallback wording */ }
+        let host = payload.endpoint;
+        try { host = new URL(payload.endpoint).host; } catch (err) { /* keep raw */ }
+
+        slot.innerHTML = '';
+        const msg = document.createElement('p');
+        msg.className = 'scan-confirm-msg';
+        msg.textContent =
+            `This scan will send ${countText} ${payload.method} requests to ${host}. ` +
+            'On a real API, that can create or change data. Continue?';
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.className = 'btn-danger';
+        runBtn.textContent = 'Run scan';
+        runBtn.addEventListener('click', () => {
+            slot.classList.add('hidden');
+            runSecurityScan(payload);
+        });
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn-secondary';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', () => slot.classList.add('hidden'));
+        slot.append(msg, runBtn, cancelBtn);
+        slot.classList.remove('hidden');
+    }
+
+    async function runSecurityScan(payload) {
         runScanBtn.disabled = true;
         runScanBtn.querySelector('.btn-text').textContent = 'Scanning...';
         runScanBtn.querySelector('.spinner').classList.remove('hidden');
@@ -1221,14 +1267,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/security/scan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    endpoint,
-                    method: document.getElementById('method').value,
-                    headers,
-                    body,
-                    sample_response: sampleResponse,
-                    categories,
-                }),
+                body: JSON.stringify(payload),
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
@@ -1260,6 +1299,44 @@ document.addEventListener('DOMContentLoaded', () => {
             runScanBtn.querySelector('.btn-text').textContent = 'Run Security Scan';
             runScanBtn.querySelector('.spinner').classList.add('hidden');
         }
+    }
+
+    runScanBtn.addEventListener('click', async () => {
+        hideError();
+        const endpoint = document.getElementById('endpoint').value.trim();
+        if (!endpoint) {
+            showError('Please enter an API endpoint to scan.');
+            return;
+        }
+        const categories = selectedCategories();
+        if (!categories.length) {
+            showError('Select at least one OWASP category to scan.');
+            return;
+        }
+
+        const { headers, body } = getRequestExtras();
+        let sampleResponse = null;
+        const sampleRaw = document.getElementById('sampleResponse').value.trim();
+        if (sampleRaw) {
+            try { sampleResponse = JSON.parse(sampleRaw); } catch (err) { /* optional field */ }
+        }
+
+        const method = document.getElementById('method').value.toUpperCase();
+        const payload = {
+            endpoint,
+            method,
+            headers,
+            body,
+            sample_response: sampleResponse,
+            categories,
+        };
+        const bypass = scanConfirmBypass;
+        scanConfirmBypass = false;
+        if (!bypass && !['GET', 'HEAD'].includes(method)) {
+            showScanConfirmPanel(payload);
+            return;
+        }
+        await runSecurityScan(payload);
     });
 
     function exportSecurityReport(format) {
