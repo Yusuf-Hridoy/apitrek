@@ -1,9 +1,11 @@
 """
 Live test execution engine.
 
-Executes generated test cases against the real API, mutating requests based on
-the test category (positive / negative / edge / assertion) and validating
-responses against expected status codes and validation rules.
+Executes generated test cases against the real API. Each case describes its
+own request (endpoint, method, headers, body) — the runner sends exactly that,
+the same request the pytest/Postman exports would send. Only a case with no
+request at all gets a generic per-category fallback mutation. Responses are
+validated against expected status codes and validation rules.
 """
 import re
 import time
@@ -11,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from core.database import _SENSITIVE_HEADER_HINTS
 from core.url_guard import safe_request, BlockedURLError
 
 REQUEST_TIMEOUT_SECONDS = 15
@@ -97,6 +100,11 @@ def _run_assertion_rule(
     return True, "Rule not mechanically verifiable — manual review recommended", False
 
 
+def _is_sensitive_header(name: Any) -> bool:
+    lowered = str(name).lower()
+    return any(hint in lowered for hint in _SENSITIVE_HEADER_HINTS)
+
+
 def _build_request(
     test_case: Dict[str, Any],
     endpoint: str,
@@ -105,37 +113,76 @@ def _build_request(
     body: Optional[Dict[str, Any]],
 ) -> Tuple[str, str, Dict[str, Any], Any, List[str]]:
     """
-    Build the HTTP request for a test case, mutating it based on category:
-      - positive / assertion: send as-is with valid data
-      - negative: remove a body field, break auth, wrong Content-Type
-      - edge: boundary values (empty string, max length, null, special chars)
-    Returns (url, method, headers, body, mutations_applied).
+    Build the HTTP request for a test case — the same request its export
+    would send. Cases carry their own ``request`` object; it wins over the
+    form for body and (per category) headers:
+
+      - positive / assertion: form headers first, then case headers on top
+        (so a positive test runs with the user's real credentials)
+      - negative / edge: form headers minus sensitive/auth headers, then
+        case headers on top — the case is authoritative for auth
+      - a case header with an empty-string value means "omit this header"
+
+    A case with no ``request`` at all falls back to a generic per-category
+    mutation; the returned notes say so explicitly.
+
+    Returns (url, method, headers, body, fallback_notes).
     """
-    tc_request = test_case.get("request") or {}
-    url = tc_request.get("endpoint") or endpoint
-    req_method = (tc_request.get("method") or method or "GET").upper()
+    tc_request = test_case.get("request")
+    if not isinstance(tc_request, dict):
+        tc_request = None
+
+    if tc_request:
+        url = tc_request.get("endpoint") or endpoint
+        req_method = (tc_request.get("method") or method or "GET").upper()
+
+        category = test_case.get("category", "positive")
+        if category in ("negative", "edge"):
+            # The case is authoritative for auth: "missing Authorization"
+            # really sends none. Start from the form headers minus secrets.
+            req_headers = {
+                k: v for k, v in (headers or {}).items() if not _is_sensitive_header(k)
+            }
+        else:
+            req_headers = dict(headers or {})
+        for key, value in (tc_request.get("headers") or {}).items():
+            if value == "":
+                # Explicit "omit this header"
+                req_headers.pop(key, None)
+            else:
+                req_headers[key] = value
+
+        if "body" in tc_request:
+            # The case body wins even when it is None or {} — deliberate.
+            req_body = tc_request["body"]
+        else:
+            req_body = body
+        return url, req_method, req_headers, req_body, []
+
+    # --- fallback: no scenario request in this case ---
+    url = endpoint
+    req_method = (method or "GET").upper()
     req_headers = dict(headers or {})
-    req_headers.update(tc_request.get("headers") or {})
-    req_body = body if body is not None else tc_request.get("body")
+    req_body = body
 
     category = test_case.get("category", "positive")
-    mutations: List[str] = []
+    notes: List[str] = []
 
     if category == "negative":
         mutated = False
         for key in list(req_headers):
             if "authorization" in key.lower():
                 req_headers[key] = "Bearer invalid-token-000"
-                mutations.append(f"Replaced {key} with an invalid token")
+                notes.append(f"Replaced {key} with an invalid token")
                 mutated = True
         if isinstance(req_body, dict) and req_body:
             removed = next(iter(req_body))
             req_body = {k: v for k, v in req_body.items() if k != removed}
-            mutations.append(f"Removed required field '{removed}' from body")
+            notes.append(f"Removed required field '{removed}' from body")
             mutated = True
         if not mutated:
             req_headers["Content-Type"] = "text/plain"
-            mutations.append("Sent wrong Content-Type: text/plain")
+            notes.append("Sent wrong Content-Type: text/plain")
 
     elif category == "edge":
         if isinstance(req_body, dict) and req_body:
@@ -145,11 +192,11 @@ def _build_request(
             for i, key in enumerate(list(req_body)):
                 choice = i % len(boundary_values)
                 req_body[key] = boundary_values[choice]
-                mutations.append(f"Field '{key}' {labels[choice]}")
+                notes.append(f"Field '{key}' {labels[choice]}")
         else:
-            mutations.append("No request body to mutate; sent as-is")
+            notes.append("No request body to mutate; sent as-is")
 
-    return url, req_method, req_headers, req_body, mutations
+    return url, req_method, req_headers, req_body, notes
 
 
 def execute_test_case(
@@ -174,7 +221,7 @@ def execute_test_case(
 
     start = time.perf_counter()
     try:
-        url, req_method, req_headers, req_body, mutations = _build_request(
+        url, req_method, req_headers, req_body, fallback_notes = _build_request(
             test_case, endpoint, method, headers, body
         )
         response = safe_request(
@@ -214,9 +261,9 @@ def execute_test_case(
                 "verifiable": verifiable,
             })
 
-        for mutation in mutations:
+        for note in fallback_notes:
             assertion_results.append({
-                "assertion": f"Request mutation: {mutation}",
+                "assertion": f"Request mutation: {note}",
                 "passed": True,
                 "detail": "Applied",
             })
