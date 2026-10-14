@@ -81,7 +81,10 @@ def test_execute_tests_rate_limited(limited_client):
         "test_cases": [],
     }
     with (
-        patch("web.routes.execute.execute_test_suite", return_value=[]),
+        patch("web.routes.execute.execute_test_suite",
+              return_value={"results": [], "passed": 0, "failed": 0, "needs_review": 0,
+                            "not_run": 0, "executed_count": 0, "pass_rate": "0%",
+                            "duration_ms": 0, "total": 0}),
         patch("web.routes.execute.save_execution_results"),
     ):
         r1 = limited_client.post("/api/execute-tests", json=payload)

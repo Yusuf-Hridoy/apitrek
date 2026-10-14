@@ -400,5 +400,40 @@ def test_save_execution_results_masks_echoed_cookie(db):
     assert db.REDACTED in stored
 
 
+def test_execution_outcome_round_trip(db):
+    session_id = db.save_session(endpoint="https://api.example.com/x", method="GET")
+    db.save_execution_results(session_id, [
+        {"test_case_id": "TC-1", "passed": True, "outcome": "passed",
+         "actual_status": 200},
+        {"test_case_id": "TC-2", "passed": False, "outcome": "not_run",
+         "actual_status": 0, "error_message": "Not sent: bad header"},
+        {"test_case_id": "TC-3", "passed": False, "outcome": "needs_review",
+         "actual_status": 200},
+    ])
+    results = db.get_session(session_id)["execution_results"]
+    assert [r["outcome"] for r in results] == ["passed", "not_run", "needs_review"]
+
+
+def test_null_outcome_restores_from_passed(db):
+    """Rows saved before the outcome column existed fall back to the boolean."""
+    session_id = db.save_session(endpoint="https://api.example.com/x", method="GET")
+    db.save_execution_results(session_id, [{"test_case_id": "TC-1", "passed": True}])
+    with db._connect() as conn:
+        conn.execute(
+            "UPDATE execution_results SET outcome = NULL WHERE session_id = ?",
+            (session_id,),
+        )
+    results = db.get_session(session_id)["execution_results"]
+    assert results[0]["outcome"] == "passed"
+
+    with db._connect() as conn:
+        conn.execute(
+            "UPDATE execution_results SET passed = 0, outcome = NULL WHERE session_id = ?",
+            (session_id,),
+        )
+    results = db.get_session(session_id)["execution_results"]
+    assert results[0]["outcome"] == "failed"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
