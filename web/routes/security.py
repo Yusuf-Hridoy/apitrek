@@ -109,7 +109,10 @@ def security_plan(payload: ScanRequest) -> Dict[str, Any]:
         wanted = set(payload.categories)
         tests = [t for t in tests if t["owasp_category"].split(" - ")[0] in wanted]
 
-    request_count = sum(int(t.get("payload", {}).get("repeat", 1)) for t in tests)
+    # The scan fires one extra baseline request to detect whether the
+    # endpoint enforces auth (detect_auth_context), so the real total is the
+    # probe repeats plus that request.
+    request_count = sum(int(t.get("payload", {}).get("repeat", 1)) for t in tests) + 1
     return {"request_count": request_count}
 
 

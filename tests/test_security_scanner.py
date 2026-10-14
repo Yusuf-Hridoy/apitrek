@@ -594,8 +594,9 @@ def test_plan_endpoint_counts_requests_without_sending(client):
     with patch("core.security_scanner.safe_request") as mock_safe_request:
         res = client.post("/api/security/plan", json=payload)
     assert res.status_code == 200
-    # POST, no numeric ID, no URL param: API2 x3 + API5 x1 + API6 (15+2) + API8 x2.
-    assert res.json()["request_count"] == 23
+    # POST, no numeric ID, no URL param: API2 x3 + API5 x1 + API6 (15+2) +
+    # API8 x2 = 23 probes, plus 1 baseline auth-detection request.
+    assert res.json()["request_count"] == 24
     # Planning must never touch the network.
     assert mock_safe_request.call_count == 0
 
@@ -605,7 +606,14 @@ def test_plan_respects_selected_categories(client):
                "categories": ["API6:2023"]}
     res = client.post("/api/security/plan", json=payload)
     assert res.status_code == 200
-    assert res.json()["request_count"] == 15  # only the rate-limit burst
+    assert res.json()["request_count"] == 16  # 15-request rate-limit burst + baseline
+
+
+def test_plan_rejects_blocked_target(client):
+    res = client.post("/api/security/plan",
+                      json={"endpoint": "http://127.0.0.1/admin", "method": "POST"})
+    assert res.status_code == 400
+    assert "non-public address" in res.json()["detail"]
 
 
 if __name__ == "__main__":
