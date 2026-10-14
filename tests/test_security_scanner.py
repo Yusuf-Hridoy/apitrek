@@ -396,6 +396,32 @@ def test_auth_finding_needs_review_on_public_endpoint(mock_request):
 
 
 @patch("core.security_scanner.safe_request")
+def test_auth_finding_secure_on_rejection_even_when_public(mock_request):
+    """A correct 401/403 is evidence the control works — Secure even when the
+    baseline says the endpoint is public (with an optional-auth note)."""
+    mock_request.return_value = _resp(status=401)
+    result = execute_security_test(
+        _auth_test(), ENDPOINT, "GET",
+        scan_context={"endpoint_is_public": True, "baseline_status": 200},
+    )
+    assert result["finding"] == "Secure"
+    assert result["vulnerable"] is False
+    assert "authentication looks optional" in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_auth_finding_secure_on_rejection_without_optional_auth_note(mock_request):
+    """Not public: a rejection is just Secure, no optional-auth note."""
+    mock_request.return_value = _resp(status=403)
+    result = execute_security_test(
+        _auth_test(), ENDPOINT, "GET",
+        scan_context={"endpoint_is_public": False, "baseline_status": 401},
+    )
+    assert result["finding"] == "Secure"
+    assert "authentication looks optional" not in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
 def test_auth_finding_vulnerable_on_201_when_auth_required(mock_request):
     """A 201 (not just 200) without credentials on a protected endpoint is Vulnerable."""
     mock_request.return_value = _resp(status=201)

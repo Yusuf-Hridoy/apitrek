@@ -537,7 +537,17 @@ def execute_security_test(
             f"Disclosed: {', '.join(leaked)}" if leaked else "No verbose error disclosure detected."
         )
     elif expected in (401, 403):
-        if scan_context and scan_context.get("endpoint_is_public"):
+        if actual_status in (401, 403):
+            # A rejection is evidence the control works — even on a public
+            # endpoint (where it suggests auth is optional, noted below).
+            finding = FINDING_SECURE
+            finding_reason = "Request was properly rejected."
+            if scan_context and scan_context.get("endpoint_is_public"):
+                finding_reason += (
+                    " Note: this endpoint accepts requests with no credentials but rejects "
+                    "this one, so authentication looks optional. Check that's intended."
+                )
+        elif scan_context and scan_context.get("endpoint_is_public"):
             # Endpoint has no auth layer — auth findings are not applicable,
             # not "vulnerable".
             finding = FINDING_NEEDS_REVIEW
@@ -546,9 +556,6 @@ def execute_security_test(
                 "succeeds without credentials), so auth findings are not meaningful here. "
                 "Scan an authenticated endpoint to evaluate authentication controls."
             )
-        elif actual_status in (401, 403):
-            finding = FINDING_SECURE
-            finding_reason = "Request was properly rejected."
         elif 200 <= actual_status < 300:
             finding = FINDING_VULNERABLE
             finding_reason = "Protected resource returned success without valid credentials."
