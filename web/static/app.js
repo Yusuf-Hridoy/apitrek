@@ -1040,10 +1040,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         );
 
+        // Vulnerable / needs-review / tests counts live on the scorecard above —
+        // this row keeps only what it adds: per-severity counts and duration.
         scanSummary.innerHTML =
-            `<span class="chip chip--bad">${s.vulnerable_count || 0} vulnerable</span>` +
-            `<span class="chip chip--warn">${s.needs_review_count || 0} needs review</span>` +
-            `<span class="chip">${s.total_tests || 0} tests</span>` +
             `<span class="chip">Critical: ${sev.Critical}</span>` +
             `<span class="chip">High: ${sev.High}</span>` +
             `<span class="chip">Medium: ${sev.Medium}</span>` +
