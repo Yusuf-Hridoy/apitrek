@@ -29,11 +29,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Honest coverage scorecard (shared by functional + security views) ---
     // coverage === null renders the neutral "not run yet" state — never a
     // misleading 0%/100% before anything has executed.
-    function renderScorecard(container, { coverage, verified, needsReview, failed, total, sentence }) {
+    function plural(n, one, many) {
+        return `${n} ${n === 1 ? one : many}`;
+    }
+
+    function renderScorecard(container, { coverage, verified, needsReview, failed, total, sentence, totalNoun = ['assertion', 'assertions'] }) {
         const pct = (coverage === null || coverage === undefined) ? null : Math.round(coverage);
         const pills = pct === null
             ? `<span class="pill pill--neutral">Not run yet</span>` +
-              `<span class="pill pill--neutral">${total} assertions</span>`
+              `<span class="pill pill--neutral">${plural(total, ...totalNoun)}</span>`
             : `<span class="pill pill--ok">${verified} verified</span>` +
               `<span class="pill pill--warn">${needsReview} needs review</span>` +
               `<span class="pill pill--bad">${failed} failed</span>` +
@@ -94,8 +98,8 @@ document.addEventListener('DOMContentLoaded', () => {
             sentence = 'Not run yet — run the tests to see how much can be verified against the real response.';
         } else {
             sentence = total
-                ? `${verified} of ${total} assertions were checked against the real response.`
-                : 'The run produced no checkable assertions.';
+                ? `${verified} of ${total} checks were verified against the real response.`
+                : 'The run produced no checks to verify.';
             if (needsReview) sentence += ` ${needsReview} couldn't be auto-verified — review those manually.`;
             if (failed) sentence += ` ${failed} failed against the live API.`;
         }
@@ -104,6 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
             verified, needsReview, failed,
             total: ran ? total : countGeneratedAssertions(lastResult),
             sentence,
+            totalNoun: ['check', 'checks'],
         });
     }
 
@@ -1776,10 +1781,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const s = stability.summary || { stable: 0, dynamic: 0, flaky: 0 };
         const flakyAssertions = (assertions || [])
             .filter((a) => a.stability && a.stability.status === 'flaky').length;
-        let pills = `<span class="pill pill--neutral">${s.stable} fields stable</span>` +
-            `<span class="pill pill--neutral">${s.dynamic} fields change each call</span>`;
-        if (s.flaky > 0) pills += `<span class="pill pill--warn">${s.flaky} fields change shape</span>`;
-        if (flakyAssertions > 0) pills += `<span class="pill pill--warn">${flakyAssertions} assertions flaky</span>`;
+        let pills = `<span class="pill pill--neutral">${plural(s.stable, 'field stable', 'fields stable')}</span>` +
+            `<span class="pill pill--neutral">${plural(s.dynamic, 'field changes each call', 'fields change each call')}</span>`;
+        if (s.flaky > 0) pills += `<span class="pill pill--warn">${plural(s.flaky, 'field changes shape', 'fields change shape')}</span>`;
+        if (flakyAssertions > 0) pills += `<span class="pill pill--warn">${plural(flakyAssertions, 'assertion flaky', 'assertions flaky')}</span>`;
         container.innerHTML =
             `<div class="stab-strip"><span class="stab-strip-title">Stability check &middot; GET called ${stability.calls} times</span>` +
             `<div class="stab-pills">${pills}</div></div>`;
