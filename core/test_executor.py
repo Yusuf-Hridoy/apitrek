@@ -4,8 +4,12 @@ Live test execution engine.
 Executes generated test cases against the real API. Each case describes its
 own request (endpoint, method, headers, body) — the runner sends exactly that,
 the same request the pytest/Postman exports would send. Only a case with no
-request at all gets a generic per-category fallback mutation. Responses are
-validated against expected status codes and validation rules.
+request at all gets a generic per-category fallback mutation, and the notes
+say so. Responses are validated against expected status codes (which may be a
+list) and validation rules.
+
+Honesty: notes about what was sent are info, never checks, and a rule the
+runner cannot verify mechanically is never reported as passed.
 """
 import re
 import time
@@ -76,8 +80,8 @@ def _run_assertion_rule(
 
     Understands status-code rules ("status code is 200") and quoted field
     checks ("field 'price' is present", "'id' must be an integer"). Rules that
-    cannot be checked mechanically pass with a note for manual review and are
-    flagged verifiable=False so the UI can distinguish them from real passes.
+    cannot be checked mechanically are flagged verifiable=False (and never
+    passed=True) so the UI can distinguish them from real passes.
     """
     lowered = rule.lower()
 
@@ -111,7 +115,7 @@ def _run_assertion_rule(
             details.append(detail)
         return all_ok, "; ".join(details), True
 
-    return True, "Rule not mechanically verifiable — manual review recommended", False
+    return False, "Rule not mechanically verifiable — manual review recommended", False
 
 
 def _is_sensitive_header(name: Any) -> bool:
@@ -213,6 +217,23 @@ def _build_request(
     return url, req_method, req_headers, req_body, notes
 
 
+def _describe_request(
+    method: str, url: str, req_headers: Dict[str, Any], req_body: Any
+) -> str:
+    """One masked info line about what was actually sent: header NAMES only
+    (sensitive ones marked), never header values or body contents."""
+    if req_headers:
+        names = [
+            f"{key} (masked)" if _is_sensitive_header(key) else str(key)
+            for key in req_headers
+        ]
+        header_part = f"headers: {', '.join(names)}"
+    else:
+        header_part = "no headers"
+    body_part = "no body" if req_body is None else "body sent"
+    return f"{method} {url} · {header_part} · {body_part}"
+
+
 def execute_test_case(
     test_case: Dict[str, Any],
     endpoint: str,
@@ -239,6 +260,19 @@ def execute_test_case(
         url, req_method, req_headers, req_body, fallback_notes = _build_request(
             test_case, endpoint, method, headers, body
         )
+        assertion_results.append({
+            "kind": "info",
+            "assertion": "Request sent",
+            "detail": _describe_request(req_method, url, req_headers, req_body),
+        })
+        for note in fallback_notes:
+            assertion_results.append({
+                "kind": "info",
+                "assertion": "Request sent",
+                "detail": f"No scenario request in this case; applied a generic "
+                          f"{category} change: {note}",
+            })
+
         response = safe_request(
             req_method,
             url,
@@ -277,13 +311,6 @@ def execute_test_case(
                 "verifiable": verifiable,
             })
 
-        for note in fallback_notes:
-            assertion_results.append({
-                "assertion": f"Request mutation: {note}",
-                "passed": True,
-                "detail": "Applied",
-            })
-
     except BlockedURLError as e:
         error_message = f"Request blocked: {e}"
     except requests.exceptions.Timeout:
@@ -297,11 +324,14 @@ def execute_test_case(
 
     if error_message is not None:
         passed = False
-    elif assertion_results:
-        passed = all(a["passed"] for a in assertion_results)
     else:
-        # Nothing to validate: a successful response counts as a pass
-        passed = 200 <= actual_status < 400
+        # Info entries (what was sent) are not checks and never count.
+        checks = [a for a in assertion_results if a.get("kind") != "info"]
+        if checks:
+            passed = all(a["passed"] for a in checks)
+        else:
+            # Nothing to validate: a successful response counts as a pass
+            passed = 200 <= actual_status < 400
 
     return {
         "test_case_id": str(test_case.get("id", "")),
