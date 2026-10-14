@@ -514,5 +514,56 @@ def test_auth_tests_do_not_fire_extra_baseline_requests(mock_request):
     assert mock_request.call_count == 1
 
 
+# --- not_applicable: selected categories that produce no probes -------------
+
+from fastapi.testclient import TestClient  # noqa: E402
+from web.app import app  # noqa: E402
+
+
+@pytest.fixture
+def client():
+    app.state.limiter._limiter.storage.reset()
+    return TestClient(app)
+
+
+def _scan(client, endpoint, method="POST"):
+    """Run the scan route with network + persistence patched out."""
+    with patch("web.routes.security.detect_auth_context",
+               return_value={"endpoint_is_public": False, "baseline_status": 200}), \
+         patch("web.routes.security.execute_security_test",
+               return_value={"finding": "Secure", "vulnerable": False, "severity": "High",
+                             "title": "t", "owasp_category": "API2:2023 - Broken Authentication",
+                             "payload_used": {}, "duration_ms": 1}), \
+         patch("web.routes.security.save_session", return_value=1), \
+         patch("web.routes.security.save_test_cases"):
+        res = client.post("/api/security/scan",
+                          json={"endpoint": endpoint, "method": method})
+    assert res.status_code == 200
+    return res.json()
+
+
+def test_not_applicable_lists_shape_dependent_categories(client):
+    """No numeric path ID and no URL-taking parameter -> API1/API7/API10 say so."""
+    data = _scan(client, "https://x.com/api/users")
+    by_cat = {na["category"]: na["reason"] for na in data["not_applicable"]}
+    assert "No numeric ID in the URL path" in by_cat["API1:2023"]
+    assert "server-side request forgery can't be probed" in by_cat["API7:2023"]
+    assert "redirect/consumption handling can't be probed" in by_cat["API10:2023"]
+
+
+def test_not_applicable_empty_when_shapes_present(client):
+    data = _scan(client, "https://x.com/users/42?callback=https://a.b")
+    cats = {na["category"] for na in data["not_applicable"]}
+    assert not ({"API1:2023", "API7:2023", "API10:2023"} & cats)
+
+
+def test_not_applicable_excluded_from_counts(client):
+    data = _scan(client, "https://x.com/api/users")
+    # Probes that DID run are counted; not-applicable categories never are.
+    assert data["summary"]["total_tests"] == len(data["findings"])
+    assert all("API1" not in (f.get("owasp_category") or "") for f in data["findings"])
+    assert all("API7" not in (f.get("owasp_category") or "") for f in data["findings"])
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

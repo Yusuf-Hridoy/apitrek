@@ -1000,6 +1000,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return counts;
     }
 
+    // Muted container under the findings table for selected categories whose
+    // probes don't apply to this endpoint's shape (kept out of the table and
+    // every count — it is an explanation, not a result).
+    function notApplicableSlot() {
+        let el = document.getElementById('notApplicableList');
+        if (!el) {
+            const wrap = securityResults.querySelector('.findings-table-wrap');
+            el = document.createElement('div');
+            el.id = 'notApplicableList';
+            if (wrap) wrap.after(el);
+        }
+        return el;
+    }
+
     function renderScanResults(data) {
         if (securityScanLoading) securityScanLoading.classList.add('hidden');
         if (securityScanError) securityScanError.classList.add('hidden');
@@ -1055,6 +1069,13 @@ document.addEventListener('DOMContentLoaded', () => {
             t.classList.toggle('active', t.dataset.sev === 'all');
         });
         renderFindings();
+        const naSlot = notApplicableSlot();
+        if (naSlot) {
+            naSlot.innerHTML = (data.not_applicable || []).map((na) =>
+                `<div class="not-applicable-line">Not applicable &middot; ` +
+                `<strong>${escapeHtml(na.category)}</strong> — ${escapeHtml(na.reason)}</div>`
+            ).join('');
+        }
         // Take over the Results panel: hide the functional empty/skeleton/results.
         emptyState.classList.add('hidden');
         resultsSkeleton.classList.add('hidden');

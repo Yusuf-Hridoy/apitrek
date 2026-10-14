@@ -21,6 +21,7 @@ from core.security_scanner import (
     detect_auth_context,
     execute_security_test,
     generate_security_tests,
+    not_applicable_categories,
 )
 from core.url_guard import validate_public_url, BlockedURLError
 from exports.security_report_generator import (
@@ -130,6 +131,11 @@ def security_scan(request: Request, payload: ScanRequest) -> Dict[str, Any]:
         "risk_score": calculate_risk_score(findings),
         "summary": summary,
         "scan_duration_ms": scan_duration_ms,
+        # Selected categories whose shape-dependent probes didn't apply — say
+        # so explicitly instead of letting silence read as "ran clean".
+        "not_applicable": not_applicable_categories(
+            payload.categories or list(OWASP_CATEGORIES), tests
+        ),
     }
 
     # Persist the scan for history (best-effort; never breaks the scan).

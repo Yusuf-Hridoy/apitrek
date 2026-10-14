@@ -303,6 +303,32 @@ def generate_security_tests(
     return tests
 
 
+def not_applicable_categories(
+    selected: List[str], tests: List[Dict[str, Any]]
+) -> List[Dict[str, str]]:
+    """Selected OWASP categories that produced no probes for this endpoint's
+    shape, each with a plain reason — so "4 findings" never reads as "the
+    other categories ran clean"."""
+    tested = {t["owasp_category"].split(" - ")[0] for t in tests}
+    reasons = {
+        "API1:2023": "No numeric ID in the URL path (e.g. /users/42), so object-level "
+                     "access can't be probed.",
+        "API7:2023": "No parameter that takes a URL, so server-side request forgery "
+                     "can't be probed.",
+        "API10:2023": "No parameter that takes a URL, so redirect/consumption handling "
+                      "can't be probed.",
+    }
+    out = []
+    for category in selected or []:
+        if category in tested:
+            continue
+        out.append({
+            "category": category,
+            "reason": reasons.get(category, "No probes apply to this endpoint's shape."),
+        })
+    return out
+
+
 def _apply_query_param(url: str, name: str, value: str) -> str:
     parts = urlparse(url)
     query = dict(parse_qsl(parts.query))
