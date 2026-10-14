@@ -748,6 +748,16 @@ textarea {
     background: color-mix(in srgb, var(--bad) 5%, transparent);
 }
 
+.test-review {
+    border-left: 4px solid var(--warn) !important;
+    background: color-mix(in srgb, var(--warn) 5%, transparent);
+}
+
+.test-notrun {
+    border-left: 4px solid var(--text-secondary) !important;
+    background: color-mix(in srgb, var(--text-secondary) 5%, transparent);
+}
+
 .status-badge {
     display: inline-block;
     padding: 2px 10px;
@@ -765,6 +775,16 @@ textarea {
 .status-badge.failed {
     background: var(--bad-subtle);
     color: var(--bad);
+}
+
+.status-badge.needs-review {
+    background: var(--warn-subtle);
+    color: var(--warn);
+}
+
+.status-badge.not-run {
+    background: var(--bg-inset);
+    color: var(--text-secondary);
 }
 
 .execution-progress {
@@ -858,6 +878,7 @@ textarea {
 .assertion-line--verified   { color: var(--ok); }
 .assertion-line--unverified { color: var(--warn); }
 .assertion-line--failed     { color: var(--bad); }
+.assertion-line--info       { color: var(--text-secondary); }
 
 .response-preview {
     font-family: var(--font-mono);
@@ -2593,6 +2614,10 @@ button:active:not(:disabled) {
 .outcome--pass .outcome-verdict { color: var(--ok); }
 .outcome--fail { background: var(--bad-subtle); }
 .outcome--fail .outcome-verdict { color: var(--bad); }
+.outcome--review { background: var(--warn-subtle); }
+.outcome--review .outcome-verdict { color: var(--warn); }
+.outcome--skipped { background: var(--bg-inset); }
+.outcome--skipped .outcome-verdict { color: var(--text-secondary); }
 .outcome-status { color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--fs-xs); }
 
 /* Collapsible response body + description — recede behind the verdict/assertions */

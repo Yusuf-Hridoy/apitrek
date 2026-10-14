@@ -86,6 +86,8 @@ document.addEventListener('DOMContentLoaded', () => {
         caseCards.forEach((entry) => {
             if (!entry.execResult) return;
             (entry.execResult.assertion_results || []).forEach((a) => {
+                // Info entries (what was sent) are not checks — never counted.
+                if (a.kind === 'info') return;
                 total += 1;
                 if (a.verifiable === false) needsReview += 1;
                 else if (a.passed) verified += 1;
@@ -632,19 +634,51 @@ document.addEventListener('DOMContentLoaded', () => {
         return { headers, body };
     }
 
+    // --- Execution outcomes -------------------------------------------------
+    // Four honest outcomes; `passed` boolean kept for older saved results.
+    function outcomeOf(result) {
+        return result.outcome || (result.passed ? 'passed' : 'failed');
+    }
+
+    const OUTCOME_UI = {
+        passed: {
+            verdict: 'Passed', badge: 'PASSED', badgeClass: 'passed',
+            cardClass: 'test-pass', stripClass: 'outcome--pass',
+        },
+        failed: {
+            verdict: 'Failed', badge: 'FAILED', badgeClass: 'failed',
+            cardClass: 'test-fail', stripClass: 'outcome--fail',
+        },
+        needs_review: {
+            verdict: 'Needs review', badge: 'NEEDS REVIEW', badgeClass: 'needs-review',
+            cardClass: 'test-review', stripClass: 'outcome--review',
+        },
+        not_run: {
+            verdict: 'Not run', badge: 'NOT RUN', badgeClass: 'not-run',
+            cardClass: 'test-notrun', stripClass: 'outcome--skipped',
+        },
+    };
+
     function buildDetailsHtml(result) {
-        const verdictClass = result.passed ? 'outcome--pass' : 'outcome--fail';
-        let html = `<div class="outcome ${verdictClass}">
-            <span class="outcome-verdict">${result.passed ? 'Passed' : 'Failed'}</span>
+        const ui = OUTCOME_UI[outcomeOf(result)] || OUTCOME_UI.failed;
+        let html = `<div class="outcome ${ui.stripClass}">
+            <span class="outcome-verdict">${ui.verdict}</span>
             <span class="outcome-status">expected ${result.expected_status ?? '—'} &rarr; got ${result.actual_status}</span>
         </div>`;
 
         if (result.error_message) {
-            html += `<div class="detail-row assertion-fail">${escapeHtml(result.error_message)}</div>`;
+            // A refused/blocked request is neutral info, not a red failure.
+            const errClass = outcomeOf(result) === 'not_run' ? 'detail-row' : 'detail-row assertion-fail';
+            html += `<div class="${errClass}">${escapeHtml(result.error_message)}</div>`;
         }
 
         if (Array.isArray(result.assertion_results) && result.assertion_results.length) {
             html += '<ul class="assertion-list">' + result.assertion_results.map((a) => {
+                // Info lines (what was sent) are neutral notes, never checks.
+                if (a.kind === 'info') {
+                    return `<li class="assertion-line assertion-line--info">` +
+                        `&#8505; ${escapeHtml(a.assertion)} — ${escapeHtml(a.detail)}</li>`;
+                }
                 // Unverifiable rules (mechanical check impossible) render amber with a
                 // distinct icon — never the green ✓ reserved for verified passes.
                 let stateClass, icon;
@@ -674,18 +708,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function applyExecutionResult(entry, result) {
         entry.execResult = result;
-        entry.el.classList.remove('test-pass', 'test-fail');
-        entry.el.classList.add(result.passed ? 'test-pass' : 'test-fail');
+        const ui = OUTCOME_UI[outcomeOf(result)] || OUTCOME_UI.failed;
+        entry.el.classList.remove('test-pass', 'test-fail', 'test-review', 'test-notrun');
+        entry.el.classList.add(ui.cardClass);
 
         // Status badge in the compact row
         const badge = entry.el.querySelector('.status-badge');
-        badge.className = `status-badge ${result.passed ? 'passed' : 'failed'}`;
-        badge.textContent = result.passed ? 'PASSED' : 'FAILED';
+        badge.className = `status-badge ${ui.badgeClass}`;
+        badge.textContent = ui.badge;
 
         entry.detailsEl.innerHTML = buildDetailsHtml(result);
         entry.detailsEl.classList.remove('hidden');
         // Reveal the card body so the outcome is visible; auto-expand on failure.
-        if (!result.passed) {
+        if (outcomeOf(result) === 'failed') {
             entry.body.classList.remove('hidden');
             entry.el.classList.add('open');
         }
@@ -748,6 +783,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const total = caseCards.length;
         let passed = 0;
         let failed = 0;
+        let needsReview = 0;
+        let notRun = 0;
         let totalDuration = 0;
         let lastExecution = null;
 
@@ -760,11 +797,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 applyExecutionResult(entry, result);
                 lastExecution = result;
                 totalDuration += result.duration_ms || 0;
-                if (result.passed) { passed++; } else { failed++; }
+                const outcome = outcomeOf(result);
+                if (outcome === 'passed') { passed++; }
+                else if (outcome === 'failed') { failed++; }
+                else if (outcome === 'needs_review') { needsReview++; }
+                else { notRun++; }
             } catch (err) {
                 failed++;
                 applyExecutionResult(entry, {
                     passed: false,
+                    outcome: 'failed',
                     expected_status: null,
                     actual_status: 0,
                     assertion_results: [],
@@ -778,20 +820,26 @@ document.addEventListener('DOMContentLoaded', () => {
         executionProgressText.textContent = 'Done';
         refreshFunctionalScorecard();
         if (lastExecution) validateContract(lastExecution);
-        const rate = total ? Math.round((passed / total) * 100) : 0;
-        executionSummary.innerHTML =
-            `<span>✅ ${passed} Passed</span>` +
-            `<span>❌ ${failed} Failed</span>` +
-            `<span>📊 ${rate}%</span>` +
+        // Pass rate counts only decided cases — needs-review and not-run are
+        // honest non-answers, not failures.
+        const decided = passed + failed;
+        const rate = decided ? Math.round((passed / decided) * 100) : 0;
+        let barHtml = '';
+        if (passed) barHtml += `<span>✅ ${passed} Passed</span>`;
+        if (failed) barHtml += `<span>❌ ${failed} Failed</span>`;
+        if (needsReview) barHtml += `<span>⚠ ${needsReview} Needs review</span>`;
+        if (notRun) barHtml += `<span>⊘ ${notRun} Not run</span>`;
+        barHtml += `<span>📊 ${rate}%</span>` +
             `<span>⏱️ ${totalDuration}ms</span>` +
             `<button type="button" class="summary-dismiss" aria-label="Dismiss">&times;</button>`;
+        executionSummary.innerHTML = barHtml;
         executionSummary.querySelector('.summary-dismiss').addEventListener('click', () => {
             executionSummary.classList.add('hidden');
         });
         executionSummary.classList.remove('hidden');
         setExecutionUiDisabled(false);
         showToast(
-            `Execution complete: ${passed}/${total} passed.`,
+            `Execution complete: ${passed}/${decided} passed.`,
             failed ? 'error' : 'success'
         );
         loadHistory();
@@ -1582,6 +1630,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!r) return;
             applyExecutionResult(entry, {
                 passed: !!r.passed,
+                outcome: r.outcome || (r.passed ? 'passed' : 'failed'),
                 expected_status: entry.data.expected ? entry.data.expected.status_code ?? null : null,
                 actual_status: r.actual_status,
                 assertion_results: [],
