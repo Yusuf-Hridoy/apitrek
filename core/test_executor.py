@@ -29,12 +29,26 @@ _TYPE_WORDS = {
 }
 
 
-def _get_expected_status(test_case: Dict[str, Any]) -> Optional[int]:
+def _get_expected_status(test_case: Dict[str, Any]) -> Any:
     """Pull the expected status code from either supported shape."""
     if test_case.get("expected_status") is not None:
         return test_case["expected_status"]
     expected = test_case.get("expected") or {}
     return expected.get("status_code")
+
+
+def _normalize_expected_status(expected: Any) -> Optional[List[int]]:
+    """Expected status can be an int, a numeric string, or a list of them."""
+    if expected is None:
+        return None
+    values = expected if isinstance(expected, (list, tuple)) else [expected]
+    codes: List[int] = []
+    for value in values:
+        try:
+            codes.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return codes or None
 
 
 def _type_matches(value: Any, word: str) -> bool:
@@ -214,6 +228,7 @@ def execute_test_case(
     """
     category = test_case.get("category", "positive")
     expected_status = _get_expected_status(test_case)
+    expected_codes = _normalize_expected_status(expected_status)
     assertion_results: List[Dict[str, Any]] = []
     error_message: Optional[str] = None
     actual_status = 0
@@ -239,11 +254,12 @@ def execute_test_case(
         except ValueError:
             response_data = None
 
-        if expected_status is not None:
+        if expected_codes:
+            joined = " or ".join(str(c) for c in expected_codes)
             assertion_results.append({
-                "assertion": f"Status code is {expected_status}",
-                "passed": actual_status == expected_status,
-                "detail": f"Expected HTTP {expected_status}, got {actual_status}",
+                "assertion": f"Status code is {joined}",
+                "passed": actual_status in expected_codes,
+                "detail": f"Expected HTTP {joined}, got {actual_status}",
             })
 
         expected = test_case.get("expected") or {}
