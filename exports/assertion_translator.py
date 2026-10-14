@@ -225,10 +225,11 @@ def _py_checks(acc: str, py_type: Optional[str], info: Optional[dict]) -> List[s
         tup = py_types[0] if len(py_types) == 1 else "(" + ", ".join(py_types) + ")"
         if "null" in types:
             return [f"assert {acc} is None or isinstance({acc}, {tup})"]
-        if info.get("kind") == "type_changes":
+        if info.get("kind") == "type_changes" or len(py_types) > 1:
             return [f"assert isinstance({acc}, {tup})"]
-        # missing_sometimes / parent_sometimes_null without null: exactly what
-        # we always emitted for presence-guarded fields.
+        # missing_sometimes / parent_sometimes_null with exactly one observed
+        # type and no null: exactly what we always emitted for
+        # presence-guarded fields.
     checks = [f"assert {acc} is not None"]
     if py_type:
         checks.append(f"assert isinstance({acc}, {py_type})")
@@ -363,10 +364,10 @@ def _js_checks(acc: str, js_type: Optional[str], info: Optional[dict]) -> List[s
         cond = f"[{type_list}].includes(typeof {acc})"
         if nullable:
             return [f"pm.expect({acc} === null || {cond}).to.be.true;"]
-        if info.get("kind") == "type_changes":
+        if info.get("kind") == "type_changes" or len(js_types) > 1:
             return [f"pm.expect({cond}).to.be.true;"]
-        # missing_sometimes / parent_sometimes_null without null: the plain
-        # type check below, as before.
+        # missing_sometimes / parent_sometimes_null with exactly one observed
+        # type and no null: the plain type check below, as before.
     if not js_type:
         return []
     if js_type in ("array", "object"):

@@ -674,9 +674,33 @@ def _assert_generated_checks_pass_all_calls(calls, rules):
     # int/float mix across calls
     ([{"p": 1}, {"p": 1.5}, {"p": 2}],
      ['has "p"']),
+    # missing in one call, type change in another, no null involved
+    ([{"q": 1}, {"q": "x"}, {}],
+     ['"q" present']),
 ])
 def test_generated_checks_pass_for_every_observed_response(calls, rules):
     _assert_generated_checks_pass_all_calls(calls, rules)
+
+
+def test_sometimes_missing_with_type_change_accepts_every_observed_type():
+    """A field that is missing in one call and changes type in another is
+    missing_sometimes; with more than one observed type the export must use
+    the multi-type check (not the call-1 type), in both exporters."""
+    calls = [{"q": 1}, {"q": "x"}, {}]
+    stability = compare_responses(calls)
+    entry = stability["fields"]["q"]
+    assert entry["status"] == "flaky"
+    assert entry["kind"] == "missing_sometimes"
+    assert entry["types"] == ["integer", "string", "missing"]
+
+    pm_text = _assert_generated_checks_pass_all_calls(calls, ['"q" present'])
+
+    py_text = "\n".join(pytest_assertions(calls[0], ['"q" present'], stability))
+    assert 'if "q" in data:' in py_text
+    assert 'assert isinstance(data["q"], (int, str))' in py_text
+
+    assert 'if (jsonData.hasOwnProperty("q")) {' in pm_text
+    assert 'pm.expect(["number", "string"].includes(typeof jsonData["q"])).to.be.true;' in pm_text
 
 
 def test_export_guards_for_nullable_object_parent():
