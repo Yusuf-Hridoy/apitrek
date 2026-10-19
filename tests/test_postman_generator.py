@@ -314,6 +314,60 @@ def test_ungroundable_assertion_is_skipped_not_faked():
     assert "pm.test.skip" not in grounded_text
 
 
+# --- skipped cases -----------------------------------------------------------
+
+_GOLDEN_DATA = {
+    "positive_test_cases": [
+        {"id": "TC-POS-01", "title": "Get item 200", "description": "Valid request",
+         "request": {"endpoint": "https://api.example.com/items/1", "method": "GET"},
+         "expected": {"status_code": 200}},
+    ],
+    "negative_test_cases": [
+        {"id": "TC-NEG-01", "title": "Not found 404",
+         "request": {"endpoint": "https://api.example.com/items/999", "method": "GET"},
+         "expected": {"status_code": 404}},
+    ],
+    "edge_cases": [],
+    "assertions": [
+        {"category": "status_code", "rule": "Response status code is 200",
+         "severity": "high", "grounded": False},
+    ],
+    "sample_response": {"id": 1},
+}
+
+_GOLDEN_POSTMAN = (Path(__file__).parent / "fixtures" / "export_golden.postman.json").read_text(
+    encoding="utf-8"
+)
+
+
+def test_non_skipped_output_matches_golden():
+    """Cases without a skip marker export byte-identically to before."""
+    collection = generate_postman_collection(
+        "https://api.example.com/items/1", "GET", _GOLDEN_DATA
+    )
+    assert collection == _GOLDEN_POSTMAN
+    json.loads(collection)
+
+
+def test_skipped_case_exports_as_postman_skip():
+    test_data = {
+        "negative_test_cases": [
+            {"id": "TC-NEG-01", "title": "Missing token is rejected",
+             "expected": {"status_code": 401},
+             "skip": {"reason": "No login needed here, so a test expecting 401 or 403 can't pass."}},
+        ]
+    }
+    collection = generate_postman_collection("https://api.example.com/items", "GET", test_data)
+    data = json.loads(collection)
+    (item,) = data["item"]
+    lines = item["event"][0]["script"]["exec"]
+    assert len(lines) == 1
+    assert lines[0] == 'pm.test.skip("[SKIPPED] Missing token is rejected", function () {});'
+    # The item keeps its request description but fabricates no assertions.
+    assert item["request"]["method"] == "GET"
+    assert "pm.expect" not in "\n".join(lines)
+
+
 if __name__ == "__main__":
     import pytest
 

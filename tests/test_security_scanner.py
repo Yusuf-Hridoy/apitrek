@@ -497,16 +497,56 @@ def test_finding_includes_expected_status_and_check_kind(mock_request):
 def test_detect_auth_context_public_when_baseline_2xx_without_auth_header(mock_request):
     mock_request.return_value = _resp(status=200)
     ctx = detect_auth_context(ENDPOINT, "GET", headers=None)
+    assert ctx["state"] == "public"
     assert ctx["endpoint_is_public"] is True
     assert ctx["baseline_status"] == 200
+    assert ctx["credential_headers"] == []
+
+
+@patch("core.security_scanner.safe_request")
+def test_detect_auth_context_authenticated_with_cookie_header(mock_request):
+    # Cookie/API-key logins count as credentials — not "public".
+    mock_request.return_value = _resp(status=200)
+    ctx = detect_auth_context(ENDPOINT, "GET", headers={"Cookie": "token=abc123"})
+    assert ctx["state"] == "authenticated"
+    assert ctx["endpoint_is_public"] is False
+    assert ctx["credential_headers"] == ["Cookie"]
+    assert ctx["baseline_status"] == 200
+
+
+@patch("core.security_scanner.safe_request")
+def test_detect_auth_context_authenticated_with_api_key_header(mock_request):
+    mock_request.return_value = _resp(status=200)
+    ctx = detect_auth_context(ENDPOINT, "GET", headers={"X-Api-Key": "k"})
+    assert ctx["state"] == "authenticated"
+    assert ctx["endpoint_is_public"] is False
 
 
 @patch("core.security_scanner.safe_request")
 def test_detect_auth_context_not_public_when_baseline_rejected(mock_request):
     mock_request.return_value = _resp(status=401)
     ctx = detect_auth_context(ENDPOINT, "GET")
+    assert ctx["state"] == "required"
     assert ctx["endpoint_is_public"] is False
     assert ctx["baseline_status"] == 401
+
+
+@patch("core.security_scanner.safe_request")
+def test_detect_auth_context_rejected_with_cookie_header(mock_request):
+    mock_request.return_value = _resp(status=403)
+    ctx = detect_auth_context(ENDPOINT, "GET", headers={"Cookie": "token=abc123"})
+    assert ctx["state"] == "rejected"
+    assert ctx["endpoint_is_public"] is False
+
+
+@patch("core.security_scanner.safe_request")
+def test_detect_auth_context_unknown_when_no_response(mock_request):
+    mock_request.side_effect = requests.exceptions.ConnectionError("down")
+    ctx = detect_auth_context(ENDPOINT, "GET", headers={"Cookie": "a=b"})
+    assert ctx["state"] == "unknown"
+    assert ctx["status"] is None
+    assert ctx["baseline_status"] is None
+    assert ctx["credential_headers"] == ["Cookie"]
 
 
 @patch("core.security_scanner.safe_request")
@@ -536,6 +576,128 @@ def test_auth_tests_do_not_fire_extra_baseline_requests(mock_request):
     assert mock_request.call_count == 1
 
 
+# --- access-test verdicts by auth state ---------------------------------------
+
+def _access_test(test_id="SEC-API2-02", expected=401, payload=None):
+    return {
+        "id": test_id, "owasp_category": "API2:2023 - Broken Authentication",
+        "severity": "High", "title": "Bad token",
+        "payload": payload if payload is not None else {"set_headers": {"Authorization": "Bearer invalid"}},
+        "expected_status": expected, "remediation": "fix",
+    }
+
+_REJECTED_CTX = {"state": "rejected", "status": 403, "credential_headers": ["Cookie"],
+                 "endpoint_is_public": False, "baseline_status": 403}
+_REQUIRED_CTX = {"state": "required", "status": 401, "credential_headers": [],
+                 "endpoint_is_public": False, "baseline_status": 401}
+_AUTHENTICATED_CTX = {"state": "authenticated", "status": 200, "credential_headers": ["Authorization"],
+                      "endpoint_is_public": False, "baseline_status": 200}
+
+
+@patch("core.security_scanner.safe_request")
+def test_rejected_token_api1_api2_api5_all_need_review(mock_request):
+    mock_request.return_value = _resp(status=403)
+    ctx = _REJECTED_CTX
+    api2 = execute_security_test(_access_test("SEC-API2-02"), ENDPOINT, "GET",
+                                 headers={"Cookie": "token=abc"}, scan_context=ctx)
+    assert api2["finding"] == "Needs Review"
+    assert "proves nothing" in api2["finding_reason"]
+
+    api1 = execute_security_test(
+        _access_test("SEC-API1-01", expected=403,
+                     payload={"modified_endpoint": "https://api.example.com/users/2"}),
+        ENDPOINT, "GET", headers={"Cookie": "token=abc"}, scan_context=ctx)
+    assert api1["finding"] == "Needs Review"
+    assert "proves nothing" in api1["finding_reason"]
+
+    api5 = execute_security_test(
+        _access_test("SEC-API5-01", expected=403,
+                     payload={"modified_endpoint": "https://api.example.com/admin/users/1"}),
+        ENDPOINT, "GET", headers={"Cookie": "token=abc"}, scan_context=ctx)
+    assert api5["finding"] == "Needs Review"
+    assert "proves nothing" in api5["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_rejected_token_access_test_2xx_still_needs_review_not_vulnerable(mock_request):
+    # Even a "successful" attack result proves nothing when the token is dead.
+    mock_request.return_value = _resp(status=200, text='{"data": "x"}')
+    result = execute_security_test(_access_test("SEC-API2-01", payload={"remove_headers": ["Authorization"]}),
+                                   ENDPOINT, "GET", scan_context=_REJECTED_CTX)
+    assert result["finding"] == "Needs Review"
+    assert result["vulnerable"] is False
+    assert "proves nothing" in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_rejected_token_header_checks_unaffected(mock_request):
+    # API8 (security headers) is not an access test — real verdicts stand.
+    mock_request.return_value = _resp(status=200, headers={})
+    test = {
+        "id": "SEC-API8-02", "owasp_category": "API8:2023 - Security Misconfiguration",
+        "severity": "Medium", "title": "Missing headers",
+        "payload": {"check": "security_headers"}, "expected_status": 200, "remediation": "fix",
+    }
+    result = execute_security_test(test, ENDPOINT, "GET", scan_context=_REJECTED_CTX)
+    assert result["finding"] == "Vulnerable"
+    assert "Missing headers" in result["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_required_state_api2_keeps_real_verdicts(mock_request):
+    mock_request.return_value = _resp(status=401)
+    result = execute_security_test(_access_test("SEC-API2-02"), ENDPOINT, "GET",
+                                   scan_context=_REQUIRED_CTX)
+    assert result["finding"] == "Secure"
+    assert result["finding_reason"] == "Request was properly rejected."
+
+
+@patch("core.security_scanner.safe_request")
+def test_required_state_api1_api5_need_working_login(mock_request):
+    mock_request.return_value = _resp(status=401)
+    ctx = _REQUIRED_CTX
+    api1 = execute_security_test(
+        _access_test("SEC-API1-01", expected=403,
+                     payload={"modified_endpoint": "https://api.example.com/users/2"}),
+        ENDPOINT, "GET", scan_context=ctx)
+    assert api1["finding"] == "Needs Review"
+    assert "needs a working login" in api1["finding_reason"]
+
+    api5 = execute_security_test(
+        _access_test("SEC-API5-01", expected=403,
+                     payload={"modified_endpoint": "https://api.example.com/admin/users/1"}),
+        ENDPOINT, "GET", scan_context=ctx)
+    assert api5["finding"] == "Needs Review"
+    assert "needs a working login" in api5["finding_reason"]
+
+
+@patch("core.security_scanner.safe_request")
+def test_authenticated_state_access_tests_keep_real_verdicts(mock_request):
+    # Real credentials -> a 2xx on an auth probe is a genuine Vulnerable.
+    mock_request.return_value = _resp(status=200, text='{"data": "secret"}')
+    result = execute_security_test(_access_test("SEC-API2-01", payload={"remove_headers": ["Authorization"]}),
+                                   ENDPOINT, "GET", scan_context=_AUTHENTICATED_CTX)
+    assert result["finding"] == "Vulnerable"
+
+    mock_request.return_value = _resp(status=401)
+    result = execute_security_test(_access_test("SEC-API2-02"), ENDPOINT, "GET",
+                                   scan_context=_AUTHENTICATED_CTX)
+    assert result["finding"] == "Secure"
+
+
+@patch("core.security_scanner.safe_request")
+def test_public_state_access_tests_regression(mock_request):
+    # No credentials anywhere: as before, a rejection on a public endpoint is
+    # Secure with the "authentication looks optional" note.
+    mock_request.return_value = _resp(status=401)
+    ctx = {"state": "public", "status": 200, "credential_headers": [],
+           "endpoint_is_public": True, "baseline_status": 200}
+    result = execute_security_test(_access_test("SEC-API2-02"), ENDPOINT, "GET",
+                                   scan_context=ctx)
+    assert result["finding"] == "Secure"
+    assert "authentication looks optional" in result["finding_reason"]
+
+
 # --- not_applicable: selected categories that produce no probes -------------
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -548,10 +710,14 @@ def client():
     return TestClient(app)
 
 
-def _scan(client, endpoint, method="POST"):
+def _scan(client, endpoint, method="POST", context=None):
     """Run the scan route with network + persistence patched out."""
+    scan_context = context or {
+        "state": "authenticated", "status": 200, "credential_headers": ["Authorization"],
+        "endpoint_is_public": False, "baseline_status": 200,
+    }
     with patch("web.routes.security.detect_auth_context",
-               return_value={"endpoint_is_public": False, "baseline_status": 200}), \
+               return_value=scan_context), \
          patch("web.routes.security.execute_security_test",
                return_value={"finding": "Secure", "vulnerable": False, "severity": "High",
                              "title": "t", "owasp_category": "API2:2023 - Broken Authentication",
@@ -577,6 +743,26 @@ def test_not_applicable_empty_when_shapes_present(client):
     data = _scan(client, "https://x.com/users/42?callback=https://a.b")
     cats = {na["category"] for na in data["not_applicable"]}
     assert not ({"API1:2023", "API7:2023", "API10:2023"} & cats)
+
+
+def test_scan_summary_includes_auth_check(client):
+    data = _scan(client, "https://x.com/users")
+    auth = data["summary"]["auth_check"]
+    assert auth == {"state": "authenticated", "status": 200,
+                    "credential_headers": ["Authorization"]}
+    # Legacy keys still present for older UI code paths.
+    assert data["summary"]["endpoint_is_public"] is False
+    assert data["summary"]["baseline_status"] == 200
+
+
+def test_scan_summary_auth_check_rejected_state(client):
+    context = {"state": "rejected", "status": 403, "credential_headers": ["Cookie"],
+               "endpoint_is_public": False, "baseline_status": 403}
+    data = _scan(client, "https://x.com/users", context=context)
+    auth = data["summary"]["auth_check"]
+    assert auth["state"] == "rejected"
+    assert auth["status"] == 403
+    assert auth["credential_headers"] == ["Cookie"]
 
 
 def test_not_applicable_excluded_from_counts(client):

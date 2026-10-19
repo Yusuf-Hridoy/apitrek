@@ -325,7 +325,8 @@ def test_route_flag_on_get_makes_three_calls_and_tags(client):
         {"id": 1, "ts": "b"},
         {"id": 1, "ts": "c"},
     ]
-    with patch("web.routes.generate.fetch_api_response", side_effect=payloads) as fetch_mock, \
+    with patch("web.routes.generate.fetch_with_status", return_value={"status": 200, "body": payloads[0]}) as status_mock, \
+         patch("web.routes.generate.fetch_api_response", side_effect=payloads[1:]) as fetch_mock, \
          patch("web.routes.generate.generate_test_cases", side_effect=_fake_generate), \
          patch("web.routes.generate.save_session", return_value=1), \
          patch("web.routes.generate.save_test_cases"):
@@ -336,7 +337,8 @@ def test_route_flag_on_get_makes_three_calls_and_tags(client):
             "stability_check": True,
         })
     assert res.status_code == 200
-    assert fetch_mock.call_count == 3
+    assert status_mock.call_count == 1
+    assert fetch_mock.call_count == 2
     body = res.json()
     assert body["stability"]["ran"] is True
     assert body["stability"]["calls"] == 3
@@ -348,7 +350,7 @@ def test_route_flag_on_get_makes_three_calls_and_tags(client):
 
 
 def test_route_flag_off_exactly_one_fetch(client):
-    with patch("web.routes.generate.fetch_api_response", return_value={"id": 1, "ts": "a"}) as fetch_mock, \
+    with patch("web.routes.generate.fetch_with_status", return_value={"status": 200, "body": {"id": 1, "ts": "a"}}) as fetch_mock, \
          patch("web.routes.generate.generate_test_cases", side_effect=_fake_generate), \
          patch("web.routes.generate.save_session", return_value=1), \
          patch("web.routes.generate.save_test_cases"):
@@ -363,7 +365,7 @@ def test_route_flag_off_exactly_one_fetch(client):
 
 
 def test_route_flag_on_post_skips_with_reason(client):
-    with patch("web.routes.generate.fetch_api_response", return_value={"id": 1}) as fetch_mock, \
+    with patch("web.routes.generate.fetch_with_status", return_value={"status": 200, "body": {"id": 1}}) as fetch_mock, \
          patch("web.routes.generate.generate_test_cases", side_effect=_fake_generate), \
          patch("web.routes.generate.save_session", return_value=1), \
          patch("web.routes.generate.save_test_cases"):
@@ -400,12 +402,13 @@ def test_route_flag_on_without_autofetch_skips_with_reason(client):
 def test_route_repeat_call_failure_never_breaks_generation(client):
     def flaky_fetch(**kwargs):
         flaky_fetch.calls += 1
-        if flaky_fetch.calls == 2:
+        if flaky_fetch.calls == 1:
             raise LiveFetchError("boom")
         return {"id": 1, "ts": "x"}
     flaky_fetch.calls = 0
 
-    with patch("web.routes.generate.fetch_api_response", side_effect=flaky_fetch), \
+    with patch("web.routes.generate.fetch_with_status", return_value={"status": 200, "body": {"id": 1, "ts": "x"}}), \
+         patch("web.routes.generate.fetch_api_response", side_effect=flaky_fetch), \
          patch("web.routes.generate.generate_test_cases", side_effect=_fake_generate), \
          patch("web.routes.generate.save_session", return_value=1), \
          patch("web.routes.generate.save_test_cases"):

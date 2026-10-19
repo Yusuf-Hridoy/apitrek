@@ -459,5 +459,59 @@ def test_suite_summary_excludes_needs_review_and_not_run(mock_request):
     assert suite["pass_rate"] == "100%"
 
 
+# --- skipped cases -----------------------------------------------------------
+
+@patch("core.test_executor.safe_request")
+def test_skipped_case_never_sends_request(mock_request):
+    case = {
+        "id": "TC-NEG-01", "title": "Missing token is rejected",
+        "category": "negative",
+        "expected": {"status_code": 401},
+        "skip": {"reason": "No login needed here, so a test expecting 401 or 403 can't pass."},
+    }
+    result = execute_test_case(case, ENDPOINT, "GET")
+    assert result["outcome"] == "skipped"
+    assert result["passed"] is False
+    assert result["actual_status"] is None
+    assert result["assertion_results"] == []
+    assert result["error_message"] == (
+        "No login needed here, so a test expecting 401 or 403 can't pass."
+    )
+    mock_request.assert_not_called()
+
+
+@patch("core.test_executor.safe_request")
+def test_skipped_case_without_reason_defaults(mock_request):
+    result = execute_test_case(
+        {"id": "TC-1", "title": "t", "skip": {"reason": ""}}, ENDPOINT, "GET"
+    )
+    assert result["outcome"] == "skipped"
+    assert result["error_message"] == "This test was skipped."
+    mock_request.assert_not_called()
+
+
+@patch("core.test_executor.safe_request")
+def test_suite_summary_counts_skipped_separately(mock_request):
+    cases = [
+        {"id": "TC-1", "title": "ok", "expected": {"status_code": 200}},
+        {"id": "TC-2", "title": "fails", "expected": {"status_code": 404}},
+        {"id": "TC-3", "title": "login test", "expected": {"status_code": 401},
+         "skip": {"reason": "No login needed here."}},
+    ]
+    mock_request.side_effect = [
+        _mock_response(status=200),  # TC-1 passes
+        _mock_response(status=200),  # TC-2 expected 404 -> fails
+        # TC-3 is skipped: never sent, so only two requests total
+    ]
+    suite = execute_test_suite(cases, ENDPOINT, "GET")
+    assert suite["passed"] == 1
+    assert suite["failed"] == 1
+    assert suite["skipped_count"] == 1
+    assert suite["total"] == 3
+    # Skipped is excluded from the pass rate: 1 / (1 + 1)
+    assert suite["pass_rate"] == "50%"
+    assert mock_request.call_count == 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

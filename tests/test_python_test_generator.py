@@ -336,6 +336,70 @@ def test_skipped_assertion_test_collects():
         assert "test_assertion_malformed_authorization" in result.stdout
 
 
+# --- skipped cases -----------------------------------------------------------
+
+GOLDEN_DATA = {
+    "positive_test_cases": [
+        {"id": "TC-POS-01", "title": "Get item 200", "description": "Valid request",
+         "request": {"endpoint": "https://api.example.com/items/1", "method": "GET"},
+         "expected": {"status_code": 200}},
+    ],
+    "negative_test_cases": [
+        {"id": "TC-NEG-01", "title": "Not found 404",
+         "request": {"endpoint": "https://api.example.com/items/999", "method": "GET"},
+         "expected": {"status_code": 404}},
+    ],
+    "edge_cases": [],
+    "assertions": [
+        {"category": "status_code", "rule": "Response status code is 200",
+         "severity": "high", "grounded": False},
+    ],
+    "sample_response": {"id": 1},
+}
+
+GOLDEN_PYTEST = (Path(__file__).parent / "fixtures" / "export_golden.py.txt").read_text(
+    encoding="utf-8"
+)
+
+
+def test_non_skipped_output_matches_golden():
+    """Cases without a skip marker export byte-identically to before."""
+    script = generate_pytest_script("https://api.example.com/items/1", "GET", GOLDEN_DATA)
+    assert script == GOLDEN_PYTEST
+    ast.parse(script)
+
+
+def test_skipped_case_exports_as_pytest_skip():
+    data = {
+        "negative_test_cases": [
+            {"id": "TC-NEG-01", "title": "Missing token is rejected",
+             "description": "No credentials sent",
+             "expected": {"status_code": 401},
+             "skip": {"reason": "No login needed here, so a test expecting 401 or 403 can't pass."}},
+        ]
+    }
+    script = generate_pytest_script("https://api.example.com/items", "GET", data)
+    assert "@pytest.mark.skip(reason=" in script
+    assert "No login needed here, so a test expecting 401 or 403 can't pass." in script
+    # Skipped body is a bare pass — no request, no fabricated assertion.
+    assert "    pass" in script
+    assert "_make_request(" not in script.split("def test_negative_missing_token_is_rejected")[1]
+    ast.parse(script)
+
+
+def test_skipped_reason_with_quotes_is_escaped():
+    data = {
+        "negative_test_cases": [
+            {"id": "TC-NEG-01", "title": "Login wall",
+             "expected": {"status_code": 403},
+             "skip": {"reason": 'A "quoted" reason can\'t break the file'}},
+        ]
+    }
+    script = generate_pytest_script("https://api.example.com/items", "GET", data)
+    ast.parse(script)
+    assert 'A "quoted" reason' in script
+
+
 if __name__ == "__main__":
     import pytest
 
