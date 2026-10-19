@@ -71,15 +71,18 @@ def _first_json_object(data: Any) -> Optional[Dict[str, Any]]:
 
 
 def _run_assertion_rule(
-    rule: str, response_data: Any, status_code: int
+    rule: str, response_data: Any, status_code: int, response_headers: Any = None
 ) -> Tuple[bool, str, bool]:
     """
     Evaluate one free-text validation rule as best as mechanically possible.
 
-    Understands status-code rules ("status code is 200") and quoted field
-    checks ("field 'price' is present", "'id' must be an integer"). Rules that
-    cannot be checked mechanically are flagged verifiable=False so the UI can
-    distinguish them from real passes — they never count as passed checks.
+    Understands status-code rules ("status code is 200"), quoted field
+    checks ("field 'price' is present", "'id' must be an integer"), and
+    header checks ("header 'Content-Encoding' is 'gzip'") — header rules are
+    verified against the response headers, never the body, and header VALUES
+    are never printed. Rules that cannot be checked mechanically are flagged
+    verifiable=False so the UI can distinguish them from real passes — they
+    never count as passed checks.
     """
     lowered = rule.lower()
 
@@ -92,6 +95,28 @@ def _run_assertion_rule(
 
     # Quoted field names: "id", 'price'
     fields = re.findall(r"['\"]([A-Za-z_][\w.\-]*)['\"]", rule)
+
+    # Header-targeted rules: check the response headers, not the body. The
+    # first quoted token is the header name; a second quoted token after
+    # "equals" is the expected value. Values are secrets-adjacent — compared
+    # quietly, never printed.
+    if fields and "header" in lowered:
+        try:
+            header_map = {str(k).lower(): v for k, v in (response_headers or {}).items()}
+        except Exception:
+            header_map = None
+        if header_map is not None:
+            name = fields[0]
+            if name.lower() not in header_map:
+                return False, f"header '{name}' MISSING", True
+            detail = f"header '{name}' present"
+            if "equals" in lowered and len(fields) > 1:
+                if str(header_map[name.lower()]) == fields[1]:
+                    detail += ", value matches"
+                else:
+                    return False, detail + ", value differs", True
+            return True, detail, True
+
     target = _first_json_object(response_data)
     if fields and target is not None:
         details = []
@@ -165,8 +190,15 @@ def _build_request(
             if value == "":
                 # Explicit "omit this header"
                 req_headers.pop(key, None)
-            else:
+            elif (
+                category in ("negative", "edge")
+                or not _is_sensitive_header(key)
+                or not any(k.lower() == key.lower() for k in (headers or {}))
+            ):
                 req_headers[key] = value
+            # else: a positive/assertion case tried to overwrite a credential
+            # header the form already supplies (the AI often writes a fake
+            # token into the case). The user's real credentials win.
 
         if "body" in tc_request:
             # The case body wins even when it is None or {} — deliberate.
@@ -321,14 +353,19 @@ def execute_test_case(
 
         expected = test_case.get("expected") or {}
         for rule in expected.get("validation_rules") or []:
-            ok, detail, verifiable = _run_assertion_rule(rule, response_data, actual_status)
+            ok, detail, verifiable = _run_assertion_rule(
+                rule, response_data, actual_status, response_headers=response.headers
+            )
             assertion_results.append({
                 "assertion": rule, "passed": ok, "detail": detail, "verifiable": verifiable,
             })
 
         # Cases from the assertions list carry their own free-text rule
         if test_case.get("rule"):
-            ok, detail, verifiable = _run_assertion_rule(test_case["rule"], response_data, actual_status)
+            ok, detail, verifiable = _run_assertion_rule(
+                test_case["rule"], response_data, actual_status,
+                response_headers=response.headers,
+            )
             assertion_results.append({
                 "assertion": test_case["rule"], "passed": ok, "detail": detail,
                 "verifiable": verifiable,

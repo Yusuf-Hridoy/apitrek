@@ -513,5 +513,136 @@ def test_suite_summary_counts_skipped_separately(mock_request):
     assert mock_request.call_count == 2
 
 
+# --- credentials: the user's real ones win on positive cases ------------------
+
+@patch("core.test_executor.safe_request")
+def test_positive_case_keeps_form_credentials_over_case_fake(mock_request):
+    """The AI often writes a fake token into the case request. On a positive
+    case the form's real credential must win; other case headers still apply."""
+    mock_request.return_value = _mock_response(status=200)
+    case = {
+        "id": "TC-POS-01", "title": "ok", "category": "positive",
+        "request": {"endpoint": ENDPOINT, "method": "GET",
+                    "headers": {"Cookie": "token=FAKE", "X-Trace": "1"}},
+        "expected": {"status_code": 200},
+    }
+    execute_test_case(case, ENDPOINT, "GET", headers={"Cookie": "token=REAL"})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["Cookie"] == "token=REAL"
+    assert kwargs["headers"]["X-Trace"] == "1"
+
+
+@patch("core.test_executor.safe_request")
+def test_assertion_case_keeps_form_credentials_too(mock_request):
+    mock_request.return_value = _mock_response(status=200)
+    case = {
+        "id": "TC-ASSERT-01", "title": "a", "category": "assertion",
+        "request": {"endpoint": ENDPOINT, "method": "GET",
+                    "headers": {"Authorization": "Bearer fake-ai-token"}},
+        "expected": {"status_code": 200},
+    }
+    execute_test_case(case, ENDPOINT, "GET",
+                      headers={"Authorization": "Bearer real-user-token"})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer real-user-token"
+
+
+@patch("core.test_executor.safe_request")
+def test_case_header_applies_when_form_lacks_it(mock_request):
+    mock_request.return_value = _mock_response(status=200)
+    case = {
+        "id": "TC-POS-01", "title": "ok", "category": "positive",
+        "request": {"endpoint": ENDPOINT, "method": "GET",
+                    "headers": {"X-Custom": "yes"}},
+        "expected": {"status_code": 200},
+    }
+    execute_test_case(case, ENDPOINT, "GET")
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["X-Custom"] == "yes"
+
+
+@patch("core.test_executor.safe_request")
+def test_positive_case_can_still_omit_a_header(mock_request):
+    """The empty-string 'omit this header' rule still works on positives."""
+    mock_request.return_value = _mock_response(status=200)
+    case = {
+        "id": "TC-POS-01", "title": "ok", "category": "positive",
+        "request": {"endpoint": ENDPOINT, "method": "GET",
+                    "headers": {"X-Extra": ""}},
+        "expected": {"status_code": 200},
+    }
+    execute_test_case(case, ENDPOINT, "GET", headers={"X-Extra": "drop-me"})
+    _, kwargs = mock_request.call_args
+    assert "X-Extra" not in kwargs["headers"]
+
+
+@patch("core.test_executor.safe_request")
+def test_negative_case_headers_stay_authoritative(mock_request):
+    """Regression guard: negative cases still send the case's own (fake)
+    credential so the 'missing/invalid token' scenario is what gets tested."""
+    mock_request.return_value = _mock_response(status=403)
+    case = {
+        "id": "TC-NEG-01", "title": "bad token", "category": "negative",
+        "request": {"endpoint": ENDPOINT, "method": "GET",
+                    "headers": {"Cookie": "token=FAKE"}},
+        "expected": {"status_code": 403},
+    }
+    execute_test_case(case, ENDPOINT, "GET", headers={"Cookie": "token=REAL"})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["Cookie"] == "token=FAKE"
+
+
+# --- rule checks: headers are headers, not body fields ------------------------
+
+def _mock_response_with_headers(status=200, payload=None, headers=None):
+    response = _mock_response(status=status, payload=payload)
+    response.headers = headers or {}
+    return response
+
+
+@patch("core.test_executor.safe_request")
+def test_header_rule_checked_against_headers_not_body(mock_request):
+    """A header-targeted rule fails as a header failure even when the status
+    matched — never reported as a missing BODY field."""
+    mock_request.return_value = _mock_response_with_headers(
+        status=200, payload={"id": 1}, headers={"Content-Type": "application/json"}
+    )
+    case = {
+        "id": "TC-1", "title": "encoding", "category": "edge",
+        "request": {"endpoint": ENDPOINT, "method": "GET"},
+        "expected": {"status_code": 200,
+                     "validation_rules": ["header 'Content-Encoding' equals 'gzip'"]},
+    }
+    result = execute_test_case(case, ENDPOINT, "GET")
+    assert result["outcome"] == "failed"
+    rule_results = [a for a in result["assertion_results"] if a.get("kind") != "info"]
+    # Status matched (200 == 200): the failure is the rule, not the status.
+    status_entry = next(a for a in rule_results if a["assertion"].startswith("Status code is"))
+    assert status_entry["passed"] is True
+    header_entry = next(a for a in rule_results if "Content-Encoding" in a["assertion"])
+    assert header_entry["passed"] is False
+    assert "header 'Content-Encoding' MISSING" in header_entry["detail"]
+    assert "field" not in header_entry["detail"]
+
+
+@patch("core.test_executor.safe_request")
+def test_header_rule_passes_when_header_present(mock_request):
+    mock_request.return_value = _mock_response_with_headers(
+        status=200, payload={"id": 1}, headers={"Content-Encoding": "gzip"}
+    )
+    case = {
+        "id": "TC-1", "title": "encoding", "category": "positive",
+        "request": {"endpoint": ENDPOINT, "method": "GET"},
+        "expected": {"status_code": 200,
+                     "validation_rules": ["header 'Content-Encoding' equals 'gzip'"]},
+    }
+    result = execute_test_case(case, ENDPOINT, "GET")
+    assert result["outcome"] == "passed"
+    header_entry = next(a for a in result["assertion_results"]
+                        if "Content-Encoding" in a.get("assertion", ""))
+    assert header_entry["passed"] is True
+    assert "header 'Content-Encoding' present" in header_entry["detail"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
