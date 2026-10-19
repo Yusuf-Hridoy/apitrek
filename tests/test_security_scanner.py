@@ -576,6 +576,63 @@ def test_auth_tests_do_not_fire_extra_baseline_requests(mock_request):
     assert mock_request.call_count == 1
 
 
+# --- API2 probes follow the credential headers the user actually sent --------
+
+def test_api2_probes_default_to_authorization_without_credentials():
+    tests = generate_security_tests(ENDPOINT, "GET", headers=None)
+    api2 = {t["id"]: t for t in tests if t["id"].startswith("SEC-API2")}
+    assert api2["SEC-API2-01"]["payload"]["remove_headers"] == ["Authorization"]
+    assert api2["SEC-API2-02"]["payload"]["set_headers"] == {
+        "Authorization": "Bearer invalid.token.value"
+    }
+    assert api2["SEC-API2-03"]["payload"]["set_headers"] == {
+        "Authorization": "NotBearer ##%%"
+    }
+
+
+def test_api2_probes_target_cookie_login():
+    tests = generate_security_tests(ENDPOINT, "GET", headers={"Cookie": "token=REAL"})
+    api2 = {t["id"]: t for t in tests if t["id"].startswith("SEC-API2")}
+    # "No credentials" removes the Cookie — otherwise the probe stays logged in.
+    assert api2["SEC-API2-01"]["payload"]["remove_headers"] == ["Cookie"]
+    assert api2["SEC-API2-02"]["payload"]["set_headers"] == {"Cookie": "token=invalid.value"}
+    assert api2["SEC-API2-03"]["payload"]["set_headers"] == {"Cookie": "token=##%%"}
+
+
+def test_api2_probes_cover_mixed_credentials():
+    tests = generate_security_tests(
+        ENDPOINT, "GET", headers={"Cookie": "token=REAL", "Authorization": "Bearer R"}
+    )
+    api2 = {t["id"]: t for t in tests if t["id"].startswith("SEC-API2")}
+    assert set(api2["SEC-API2-01"]["payload"]["remove_headers"]) == {"Cookie", "Authorization"}
+    assert set(api2["SEC-API2-02"]["payload"]["set_headers"]) == {"Cookie", "Authorization"}
+
+
+@patch("core.security_scanner.safe_request")
+def test_api2_no_cookie_probe_sends_no_cookie(mock_request):
+    # Cookie-login API: removing the Cookie must actually log the probe out.
+    mock_request.return_value = _resp(status=403)
+    test = generate_security_tests(ENDPOINT, "GET", headers={"Cookie": "token=REAL"})
+    probe = next(t for t in test if t["id"] == "SEC-API2-01")
+    result = execute_security_test(probe, ENDPOINT, "GET",
+                                   headers={"Cookie": "token=REAL"})
+    _, kwargs = mock_request.call_args
+    assert "Cookie" not in kwargs["headers"]
+    assert result["finding"] == "Secure"
+
+
+@patch("core.security_scanner.safe_request")
+def test_api2_invalid_cookie_probe_sends_invalid_cookie(mock_request):
+    mock_request.return_value = _resp(status=403)
+    test = generate_security_tests(ENDPOINT, "GET", headers={"Cookie": "token=REAL"})
+    probe = next(t for t in test if t["id"] == "SEC-API2-02")
+    result = execute_security_test(probe, ENDPOINT, "GET",
+                                   headers={"Cookie": "token=REAL"})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["Cookie"] == "token=invalid.value"
+    assert result["finding"] == "Secure"
+
+
 # --- access-test verdicts by auth state ---------------------------------------
 
 def _access_test(test_id="SEC-API2-02", expected=401, payload=None):
@@ -763,6 +820,60 @@ def test_scan_summary_auth_check_rejected_state(client):
     assert auth["state"] == "rejected"
     assert auth["status"] == 403
     assert auth["credential_headers"] == ["Cookie"]
+
+
+def test_public_scan_marks_api2_not_applicable(client):
+    """Public endpoint: API2 probes move to 'not applicable' — out of the
+    findings table and the counts — instead of Needs Review."""
+    context = {"state": "public", "status": 200, "credential_headers": [],
+               "endpoint_is_public": True, "baseline_status": 200}
+
+    def _fake_execute(test, *args, **kwargs):
+        return {
+            "test_case_id": test["id"], "finding": "Needs Review",
+            "vulnerable": False, "severity": test["severity"],
+            "title": test["title"], "owasp_category": test["owasp_category"],
+            "finding_reason": "r", "payload_used": {}, "duration_ms": 1,
+            "actual_status": 200, "remediation": "",
+        }
+
+    with patch("web.routes.security.detect_auth_context", return_value=context), \
+         patch("web.routes.security.execute_security_test", side_effect=_fake_execute), \
+         patch("web.routes.security.save_session", return_value=1), \
+         patch("web.routes.security.save_test_cases"):
+        res = client.post("/api/security/scan",
+                          json={"endpoint": "https://x.com/users", "method": "GET"})
+    assert res.status_code == 200
+    data = res.json()
+
+    assert not [f for f in data["findings"]
+                if str(f.get("test_case_id", "")).startswith("SEC-API2")]
+    api2_na = [na for na in data["not_applicable"] if na["category"] == "API2:2023"]
+    assert api2_na, "API2 should be listed as not applicable on a public endpoint"
+    assert "needs no login" in api2_na[0]["reason"]
+    # Only non-API2 findings keep their Needs Review verdict in the counts.
+    assert data["summary"]["needs_review_count"] == len(data["findings"])
+
+
+def test_scan_saves_one_security_session(client):
+    from unittest.mock import MagicMock
+    save_mock = MagicMock(return_value=1)
+    with patch("web.routes.security.detect_auth_context",
+               return_value={"state": "authenticated", "status": 200,
+                             "credential_headers": ["Authorization"],
+                             "endpoint_is_public": False, "baseline_status": 200}), \
+         patch("web.routes.security.execute_security_test",
+               return_value={"finding": "Secure", "vulnerable": False, "severity": "High",
+                             "title": "t", "owasp_category": "API2:2023 - Broken Authentication",
+                             "payload_used": {}, "duration_ms": 1}), \
+         patch("web.routes.security.save_session", save_mock), \
+         patch("web.routes.security.save_test_cases"):
+        res = client.post("/api/security/scan",
+                          json={"endpoint": "https://x.com/users", "method": "GET"})
+    assert res.status_code == 200
+    # Exactly one session, in the security bucket — no stray functional row.
+    assert save_mock.call_count == 1
+    assert save_mock.call_args.kwargs["mode"] == "security"
 
 
 def test_not_applicable_excluded_from_counts(client):

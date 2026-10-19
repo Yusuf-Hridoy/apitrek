@@ -16,7 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
-from core.auth_check import classify_auth
+from core.auth_check import classify_auth, credential_header_names
 from core.url_guard import safe_request, BlockedURLError
 
 REQUEST_TIMEOUT_SECONDS = 15
@@ -173,12 +173,35 @@ def generate_security_tests(
             ))
 
     # --- API2:2023 Broken Authentication ---
+    # The probes act on EVERY credential header the user sent (Authorization,
+    # Cookie, X-Api-Key, ...), not just Authorization — otherwise a cookie
+    # login stays logged in and every probe falsely reads "Vulnerable".
+    cred_names = credential_header_names(headers)
+    targets = cred_names or ["Authorization"]
+
+    def _invalid_value(name: str) -> str:
+        lowered = name.lower()
+        if "cookie" in lowered:
+            return "token=invalid.value"
+        if "auth" in lowered:
+            return "Bearer invalid.token.value"
+        return "invalid.token.value"
+
+    def _malformed_value(name: str) -> str:
+        lowered = name.lower()
+        if "cookie" in lowered:
+            return "token=##%%"
+        if "auth" in lowered:
+            return "NotBearer ##%%"
+        return "##%%"
+
     tests.append(_make_test(
         "SEC-API2-01", "API2:2023", "High",
-        "Request without authentication token",
-        "Send the request with the Authorization header removed. The API must "
-        "reject unauthenticated access to protected resources.",
-        {"remove_headers": ["Authorization"]},
+        "Request without authentication credentials",
+        "Send the request with every credential header removed ("
+        + ", ".join(targets)
+        + "). The API must reject unauthenticated access to protected resources.",
+        {"remove_headers": list(targets)},
         401,
         "Require authentication on all non-public endpoints and return 401 "
         "when credentials are missing.",
@@ -186,20 +209,21 @@ def generate_security_tests(
     tests.append(_make_test(
         "SEC-API2-02", "API2:2023", "High",
         "Request with an invalid token",
-        "Send a garbage bearer token. The API must reject tokens that fail "
-        "signature or format validation.",
-        {"set_headers": {"Authorization": "Bearer invalid.token.value"}},
+        "Replace each credential header (" + ", ".join(targets) + ") with a "
+        "garbage value. The API must reject tokens that fail signature or "
+        "format validation.",
+        {"set_headers": {name: _invalid_value(name) for name in targets}},
         401,
         "Validate token signature, expiry, and issuer on every request.",
     ))
     tests.append(_make_test(
         "SEC-API2-03", "API2:2023", "Medium",
-        "Malformed Authorization header",
-        "Use a wrong auth scheme and malformed header value. The API must not "
-        "crash or accept it.",
-        {"set_headers": {"Authorization": "NotBearer ##%%"}},
+        "Malformed credential header",
+        "Use a wrong auth scheme and malformed value in each credential "
+        "header (" + ", ".join(targets) + "). The API must not crash or accept it.",
+        {"set_headers": {name: _malformed_value(name) for name in targets}},
         401,
-        "Strictly parse the Authorization header; reject unknown schemes with 401.",
+        "Strictly parse credential headers; reject unknown schemes with 401.",
     ))
 
     # --- API5:2023 Broken Function Level Authorization ---

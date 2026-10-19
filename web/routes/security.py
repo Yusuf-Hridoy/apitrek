@@ -160,6 +160,23 @@ def security_scan(request: Request, payload: ScanRequest) -> Dict[str, Any]:
     ]
     scan_duration_ms = int((time.perf_counter() - start) * 1000)
 
+    not_applicable = not_applicable_categories(
+        payload.categories or list(OWASP_CATEGORIES), tests
+    )
+    if scan_context.get("state") == "public":
+        # No login layer: the API2 auth probes can't produce meaningful
+        # results. List them as "not applicable" (like shape-mismatched
+        # categories) instead of Needs Review — they stay out of the table
+        # and out of the counts. API8 (headers/errors) remains real findings.
+        api2 = [f for f in findings if str(f.get("test_case_id", "")).startswith("SEC-API2")]
+        if api2:
+            findings = [f for f in findings
+                        if not str(f.get("test_case_id", "")).startswith("SEC-API2")]
+            not_applicable.append({
+                "category": "API2:2023",
+                "reason": "This endpoint needs no login, so authentication checks don't apply.",
+            })
+
     summary = _build_summary(findings)
     summary["auth_check"] = {
         "state": scan_context.get("state"),
@@ -177,9 +194,7 @@ def security_scan(request: Request, payload: ScanRequest) -> Dict[str, Any]:
         "scan_duration_ms": scan_duration_ms,
         # Selected categories whose shape-dependent probes didn't apply — say
         # so explicitly instead of letting silence read as "ran clean".
-        "not_applicable": not_applicable_categories(
-            payload.categories or list(OWASP_CATEGORIES), tests
-        ),
+        "not_applicable": not_applicable,
     }
 
     # Persist the scan for history (best-effort; never breaks the scan).
