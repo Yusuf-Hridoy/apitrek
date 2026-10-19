@@ -27,12 +27,24 @@ def _vulnerable_findings(scan_results: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [f for f in scan_results.get("findings", []) if f.get("vulnerable")]
 
 
+def _severity_counts(findings: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Count ALL findings per severity — the same way the on-screen filter
+    tabs count them — so the report and the screen can never disagree."""
+    counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+    for f in findings:
+        sev = f.get("severity", "")
+        if sev in counts:
+            counts[sev] += 1
+    return counts
+
+
 def generate_markdown_report(scan_results: Dict[str, Any], endpoint: str) -> str:
     """Generate a Markdown security report from a /security/scan response."""
     findings = scan_results.get("findings", [])
     summary = scan_results.get("summary", {})
     score = scan_results.get("risk_score", 0)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    sev_counts = _severity_counts(findings)
 
     lines = [
         "# API Security Scan Report",
@@ -48,8 +60,9 @@ def generate_markdown_report(scan_results: Dict[str, Any], endpoint: str) -> str
         f"- Tests executed: {summary.get('total_tests', len(findings))}",
         f"- Vulnerable findings: {summary.get('vulnerable_count', len(_vulnerable_findings(scan_results)))}",
         f"- Needs review (manual): {summary.get('needs_review_count', 0)}",
-        f"- Critical: {summary.get('critical', 0)} | High: {summary.get('high', 0)} "
-        f"| Medium: {summary.get('medium', 0)} | Low: {summary.get('low', 0)}",
+        f"- Findings by severity (all tests): "
+        f"Critical: {sev_counts['Critical']} | High: {sev_counts['High']} "
+        f"| Medium: {sev_counts['Medium']} | Low: {sev_counts['Low']}",
         f"- Scan duration: {scan_results.get('scan_duration_ms', 0)} ms",
         "",
         "## Findings",
@@ -111,6 +124,7 @@ def generate_html_report(scan_results: Dict[str, Any], endpoint: str) -> str:
     score = scan_results.get("risk_score", 0)
     label = _risk_label(score)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    sev_counts = _severity_counts(findings)
 
     rows = []
     for f in findings:
@@ -174,8 +188,9 @@ def generate_html_report(scan_results: Dict[str, Any], endpoint: str) -> str:
   <p>Tests executed: {summary.get('total_tests', len(findings))} &middot;
      Vulnerable: {summary.get('vulnerable_count', len(_vulnerable_findings(scan_results)))} &middot;
      Needs review: {summary.get('needs_review_count', 0)} &middot;
-     Critical: {summary.get('critical', 0)} &middot; High: {summary.get('high', 0)} &middot;
-     Medium: {summary.get('medium', 0)} &middot; Low: {summary.get('low', 0)} &middot;
+     Findings by severity (all tests) &mdash;
+     Critical: {sev_counts['Critical']} &middot; High: {sev_counts['High']} &middot;
+     Medium: {sev_counts['Medium']} &middot; Low: {sev_counts['Low']} &middot;
      Duration: {scan_results.get('scan_duration_ms', 0)} ms</p>
 
   <h2>Findings</h2>

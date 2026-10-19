@@ -84,3 +84,34 @@ def test_html_report_renders_findings():
     report = generate_html_report(_scan_results(), "https://api.example.com")
     assert "<table>" in report
     assert "Rate limit bypass | no throttle observed" in report
+
+
+def _scan_results_mixed_severities():
+    results = _scan_results()
+    # summary counts vulnerable-only (as the scan route builds it); the
+    # findings list mixes severities and verdicts like a real scan.
+    results["findings"].append({
+        "severity": "Medium",
+        "owasp_category": "API7:2023",
+        "title": "SSRF probe",
+        "finding": "Needs Review",
+        "finding_reason": "No automated signal.",
+        "actual_status": "400",
+        "remediation": "Validate URLs.",
+        "payload_used": {},
+        "vulnerable": False,
+    })
+    return results
+
+
+def test_report_severity_counts_match_the_screen():
+    """Severity breakdown counts ALL findings (like the on-screen filter
+    tabs), not just vulnerable ones — report and screen must agree."""
+    results = _scan_results_mixed_severities()
+    md = generate_markdown_report(results, "https://api.example.com")
+    html = generate_html_report(results, "https://api.example.com")
+    for report in (md, html):
+        assert "Critical: 0" in report
+        assert "High: 1" in report
+        assert "Medium: 1" in report
+        assert "Low: 1" in report
