@@ -491,6 +491,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (err) { /* relative or odd URL — skip the check */ }
 
         setCurlFeedback(lines, 'ok');
+        // The feedback box may be closed/hidden — confirm the fill visibly too.
+        showToast('Filled the form from your pasted cURL.', 'success');
     }
 
     if (curlToggle && curlPanel) {
@@ -741,16 +743,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function buildDetailsHtml(result, caseData) {
         const ui = OUTCOME_UI[outcomeOf(result)] || OUTCOME_UI.failed;
+        // Lead line: only show "expected X → got Y" when the status itself is
+        // the mismatch. When the status matched but a rule failed, say so —
+        // printing "expected 200 → got 200" as the headline is misleading.
+        const checks = (result.assertion_results || []).filter((a) => a.kind !== 'info');
+        const statusCheck = checks.find((a) => String(a.assertion || '').startsWith('Status code is'));
+        const failedChecks = checks.filter((a) => a.passed === false && a.verifiable !== false);
+        let headLine;
+        if (failedChecks.length && !(statusCheck && statusCheck.passed === false)) {
+            headLine = "a response check didn't pass (see below)";
+        } else {
+            headLine = `expected ${result.expected_status ?? '—'} &rarr; got ${result.actual_status ?? '—'}`;
+        }
         let html = `<div class="outcome ${ui.stripClass}">
             <span class="outcome-verdict">${ui.verdict}</span>
-            <span class="outcome-status">expected ${result.expected_status ?? '—'} &rarr; got ${result.actual_status ?? '—'}</span>
+            <span class="outcome-status">${headLine}</span>
         </div>`;
 
+        const outcome = outcomeOf(result);
         if (result.error_message) {
             // A refused/blocked/skipped request is neutral info, not a red failure.
-            const neutral = outcomeOf(result) === 'not_run' || outcomeOf(result) === 'skipped';
+            const neutral = outcome === 'not_run' || outcome === 'skipped';
             const errClass = neutral ? 'detail-row' : 'detail-row assertion-fail';
             html += `<div class="${errClass}">${escapeHtml(result.error_message)}</div>`;
+        } else if (outcome === 'not_run' || outcome === 'skipped') {
+            // A not-run/skipped card always explains itself — never a bare badge.
+            const fallback = outcome === 'not_run'
+                ? 'Not sent: no reason was recorded for this result.'
+                : 'This test was skipped.';
+            html += `<div class="detail-row">${fallback}</div>`;
         }
 
         // When the user's own credentials are rejected (or missing), a 401/403
@@ -908,6 +929,43 @@ document.addEventListener('DOMContentLoaded', () => {
         caseCards.forEach((entry) => { entry.runBtn.disabled = disabled; });
     }
 
+    // --- Execution summary bar (shared by Run All and history restore) -------
+    function tallyRunOutcomes() {
+        const tally = { passed: 0, failed: 0, needsReview: 0, notRun: 0, skipped: 0, totalDuration: 0 };
+        caseCards.forEach((entry) => {
+            if (!entry.execResult) return;
+            tally.totalDuration += entry.execResult.duration_ms || 0;
+            const outcome = outcomeOf(entry.execResult);
+            if (outcome === 'passed') { tally.passed++; }
+            else if (outcome === 'failed') { tally.failed++; }
+            else if (outcome === 'needs_review') { tally.needsReview++; }
+            else if (outcome === 'skipped') { tally.skipped++; }
+            else { tally.notRun++; }
+        });
+        return tally;
+    }
+
+    function renderExecutionSummaryBar(tally) {
+        // Pass rate counts only decided cases — needs-review, not-run and
+        // skipped are honest non-answers, not failures.
+        const decided = tally.passed + tally.failed;
+        const rate = decided ? Math.round((tally.passed / decided) * 100) : 0;
+        let barHtml = '';
+        if (tally.passed) barHtml += `<span>✅ ${tally.passed} Passed</span>`;
+        if (tally.failed) barHtml += `<span>❌ ${tally.failed} Failed</span>`;
+        if (tally.needsReview) barHtml += `<span>⚠ ${tally.needsReview} Needs review</span>`;
+        if (tally.notRun) barHtml += `<span>⊘ ${tally.notRun} Not run</span>`;
+        if (tally.skipped) barHtml += `<span>⊘ ${tally.skipped} Skipped</span>`;
+        barHtml += `<span>📊 ${rate}%</span>` +
+            `<span>⏱️ ${tally.totalDuration}ms</span>` +
+            `<button type="button" class="summary-dismiss" aria-label="Dismiss">&times;</button>`;
+        executionSummary.innerHTML = barHtml;
+        executionSummary.querySelector('.summary-dismiss').addEventListener('click', () => {
+            executionSummary.classList.add('hidden');
+        });
+        executionSummary.classList.remove('hidden');
+    }
+
     runAllBtn.addEventListener('click', async () => {
         if (!lastResult || !caseCards.length) {
             showError('Please generate test cases first before running them.');
@@ -919,12 +977,6 @@ document.addEventListener('DOMContentLoaded', () => {
         setExecutionUiDisabled(true);
 
         const total = caseCards.length;
-        let passed = 0;
-        let failed = 0;
-        let needsReview = 0;
-        let notRun = 0;
-        let skipped = 0;
-        let totalDuration = 0;
         let lastExecution = null;
 
         for (let i = 0; i < total; i++) {
@@ -935,17 +987,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const result = entry.data.skip ? skippedResult(entry) : await executeOne(entry);
                 applyExecutionResult(entry, result);
                 lastExecution = result;
-                totalDuration += result.duration_ms || 0;
-                const outcome = outcomeOf(result);
-                if (outcome === 'passed') { passed++; }
-                else if (outcome === 'failed') { failed++; }
-                else if (outcome === 'needs_review') { needsReview++; }
-                else if (outcome === 'skipped') { skipped++; }
-                else { notRun++; }
             } catch (err) {
                 // Apitrek's own call failed (firewall, rate limit, network) —
                 // the API was never contacted, so this is "not run", not failed.
-                notRun++;
                 applyExecutionResult(entry, notRunResult(err));
             }
         }
@@ -954,28 +998,15 @@ document.addEventListener('DOMContentLoaded', () => {
         executionProgressText.textContent = 'Done';
         refreshFunctionalScorecard();
         if (lastExecution) validateContract(lastExecution);
-        // Pass rate counts only decided cases — needs-review, not-run and
-        // skipped are honest non-answers, not failures.
-        const decided = passed + failed;
-        const rate = decided ? Math.round((passed / decided) * 100) : 0;
-        let barHtml = '';
-        if (passed) barHtml += `<span>✅ ${passed} Passed</span>`;
-        if (failed) barHtml += `<span>❌ ${failed} Failed</span>`;
-        if (needsReview) barHtml += `<span>⚠ ${needsReview} Needs review</span>`;
-        if (notRun) barHtml += `<span>⊘ ${notRun} Not run</span>`;
-        if (skipped) barHtml += `<span>⊘ ${skipped} Skipped</span>`;
-        barHtml += `<span>📊 ${rate}%</span>` +
-            `<span>⏱️ ${totalDuration}ms</span>` +
-            `<button type="button" class="summary-dismiss" aria-label="Dismiss">&times;</button>`;
-        executionSummary.innerHTML = barHtml;
-        executionSummary.querySelector('.summary-dismiss').addEventListener('click', () => {
-            executionSummary.classList.add('hidden');
-        });
-        executionSummary.classList.remove('hidden');
+        const tally = tallyRunOutcomes();
+        renderExecutionSummaryBar(tally);
         setExecutionUiDisabled(false);
+        // Red icon only when nothing passed; a mostly-green run stays neutral.
+        const decided = tally.passed + tally.failed;
+        const toastType = tally.failed === 0 ? 'success' : (tally.passed > 0 ? 'info' : 'error');
         showToast(
-            `Execution complete: ${passed}/${decided} passed.`,
-            failed ? 'error' : 'success'
+            `Execution complete: ${tally.passed}/${decided} passed.`,
+            toastType
         );
         loadHistory();
     });
@@ -1083,6 +1114,10 @@ document.addEventListener('DOMContentLoaded', () => {
     dismissWarningBtn.addEventListener('click', () => securityWarning.classList.add('hidden'));
 
     async function loadOwaspCategories() {
+        // Hide the whole field (heading included) until the checkboxes are
+        // ready — otherwise "OWASP Categories" sits empty for ~1s.
+        const group = owaspCategoriesEl.closest('.form-group');
+        if (group) group.classList.add('hidden');
         try {
             const res = await fetch('/api/security/owasp-categories');
             const categories = await res.json();
@@ -1096,7 +1131,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 </label>
             `).join('');
             owaspLoaded = true;
+            if (group) group.classList.remove('hidden');
         } catch (err) {
+            if (group) group.classList.remove('hidden');
             owaspCategoriesEl.innerHTML = '<p class="case-desc">Could not load OWASP categories. Is the server running?</p>';
         }
     }
@@ -1167,7 +1204,6 @@ document.addEventListener('DOMContentLoaded', () => {
         renderRiskContextNote(data);
 
         const s = data.summary || {};
-        const sev = severityCounts(data.findings);
 
         // Honest coverage scorecard above the summary chips: coverage = the
         // share of findings that reached a definite verdict (Secure or
@@ -1197,13 +1233,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         );
 
-        // Vulnerable / needs-review / tests counts live on the scorecard above —
-        // this row keeps only what it adds: per-severity counts and duration.
+        // Vulnerable / needs-review / per-severity counts live on the scorecard
+        // and the filter tabs above — this row keeps only what it adds: duration.
         scanSummary.innerHTML =
-            `<span class="chip">Critical: ${sev.Critical}</span>` +
-            `<span class="chip">High: ${sev.High}</span>` +
-            `<span class="chip">Medium: ${sev.Medium}</span>` +
-            `<span class="chip">Low: ${sev.Low}</span>` +
             `<span class="chip">${((data.scan_duration_ms || 0) / 1000).toFixed(1)}s</span>`;
 
         activeSeverity = 'all';
@@ -1268,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td data-label="Severity"><span class="severity-badge severity-${(f.severity || '').toLowerCase()}">${escapeHtml(f.severity || '')}</span></td>
                 <td data-label="OWASP">${escapeHtml(owaspShort)}</td>
                 <td data-label="Title">${escapeHtml(f.title || '')}</td>
-                <td data-label="Status"><span class="${statusCls}">Expected <code>${expectedForFinding(f)}</code>, ${gotPart} &rarr; ${escapeHtml(f.finding || '')}</span></td>
+                <td data-label="Status"><span class="${statusCls}">Expected <code>${expectedForFinding(f)}</code><span class="status-got">, ${gotPart}</span> &rarr; ${escapeHtml(f.finding || '')}</span></td>
                 <td data-label=""><button type="button" class="expand-btn">Details <span class="chevron">▾</span></button></td>
             `;
 
@@ -1867,6 +1899,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Re-apply stored PASS/FAIL results to restored cards. Best-effort: only
     // results keyed by the DB row id (i.e. history reruns) match; unmatched
     // cards simply stay "Pending" rather than showing anything misleading.
+    // Per-check assertion detail is stored with each result (since the
+    // assertion_results_json column), so the scorecard and summary bar can be
+    // rebuilt exactly as they looked live.
     function applyStoredExecutionResults(execResults) {
         if (!Array.isArray(execResults) || !execResults.length) return;
         const byId = {};
@@ -1882,12 +1917,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 outcome: r.outcome || (r.passed ? 'passed' : 'failed'),
                 expected_status: entry.data.expected ? entry.data.expected.status_code ?? null : null,
                 actual_status: r.actual_status,
-                assertion_results: [],
+                assertion_results: r.assertion_results || [],
                 actual_response_preview: r.actual_response || '',
                 error_message: r.error_message || null,
+                duration_ms: r.duration_ms || 0,
             });
         });
+        // Recompute the scorecard and summary bar from the restored outcomes
+        // so a reloaded session shows the same numbers it had live.
         refreshFunctionalScorecard();
+        renderExecutionSummaryBar(tallyRunOutcomes());
     }
 
     async function loadSession(id, mode) {
@@ -2222,7 +2261,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <span class="case-id">${escapeHtml(c.id || '')}</span>
                     <span class="case-title">${escapeHtml(c.title || 'Untitled')}</span>
                     <span class="case-row-meta">${statusTag}${extraTags}</span>
-                    <button type="button" class="btn-run">Run</button>
+                    <button type="button" class="btn-run${skip ? ' hidden' : ''}">Run</button>
                     <span class="chevron">&#9662;</span>
                 </div>
                 ${skipHtml}

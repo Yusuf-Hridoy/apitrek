@@ -7,7 +7,7 @@ import ipaddress
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -291,6 +291,52 @@ def test_route_fetch_hard_failure_still_502(client):
     assert res.status_code == 502
 
 
+def test_route_saves_functional_session_with_mode(client):
+    save_mock = MagicMock(return_value=1)
+
+    def _fake_generate(**kwargs):
+        return copy.deepcopy(GENERATED)
+
+    with patch("web.routes.generate.fetch_with_status",
+               return_value={"status": 200, "body": {"id": 1}}), \
+         patch("web.routes.generate.generate_test_cases", side_effect=_fake_generate), \
+         patch("web.routes.generate.save_session", save_mock), \
+         patch("web.routes.generate.save_test_cases"):
+        res = client.post("/generate-tests", json={
+            "endpoint": "https://api.example.com/users/1",
+            "method": "GET",
+            "auto_fetch": True,
+        })
+    assert res.status_code == 200
+    assert save_mock.call_count == 1
+    # Explicitly functional — never lands in the security history bucket.
+    assert save_mock.call_args.kwargs["mode"] == "functional"
+    assert "_session_id" in res.json()
+
+
+def test_route_failed_case_save_leaves_no_ghost_session(client):
+    """If the test cases can't be saved, the empty session row is dropped
+    instead of reloading later as a misleading '0 tests' entry."""
+
+    def _fake_generate(**kwargs):
+        return copy.deepcopy(GENERATED)
+
+    with patch("web.routes.generate.fetch_with_status",
+               return_value={"status": 200, "body": {"id": 1}}), \
+         patch("web.routes.generate.generate_test_cases", side_effect=_fake_generate), \
+         patch("web.routes.generate.save_session", return_value=42), \
+         patch("web.routes.generate.save_test_cases", side_effect=RuntimeError("db locked")), \
+         patch("web.routes.generate.delete_session") as delete_mock:
+        res = client.post("/generate-tests", json={
+            "endpoint": "https://api.example.com/users/1",
+            "method": "GET",
+            "auto_fetch": True,
+        })
+    assert res.status_code == 200
+    delete_mock.assert_called_once_with(42)
+    assert "_session_id" not in res.json()
+
+
 # --- prompt content ----------------------------------------------------------
 
 from llm.prompt_templates import build_user_prompt  # noqa: E402
@@ -323,6 +369,33 @@ def test_prompt_rejected_mentions_status_and_names():
     )
     assert "rejected with status 403" in prompt
     assert "these headers (Cookie)" in prompt
+
+
+def test_prompt_tells_ai_the_real_login_header_and_status():
+    """Cookie/403 login: the AI must not write Authorization/401 tests."""
+    prompt = build_user_prompt(
+        "https://api.example.com/x", "GET",
+        auth_state={"state": "rejected", "status": 403,
+                    "credential_headers": ["Cookie"]},
+    )
+    assert "Cookie" in prompt
+    assert "403" in prompt
+    # It names the real header and status instead of the 401/Authorization default.
+    assert "target them in negative auth tests, not `Authorization`" in prompt
+    assert "expect 403, not 401" in prompt
+
+
+def test_prompt_required_names_status_not_401():
+    prompt = build_user_prompt(
+        "https://api.example.com/x", "GET",
+        auth_state={"state": "required", "status": 401, "credential_headers": []},
+    )
+    assert "expect 401" in prompt  # 401 IS the observed status here
+    prompt_403 = build_user_prompt(
+        "https://api.example.com/x", "GET",
+        auth_state={"state": "required", "status": 403, "credential_headers": []},
+    )
+    assert "A request without credentials returns 403" in prompt_403
 
 
 def test_prompt_required_mentions_status():

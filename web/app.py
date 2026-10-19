@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from web.limiter import limiter
 from web.routes.generate import router as generate_router
@@ -68,6 +68,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class GuardedStaticFiles(StaticFiles):
+    """Never serve a zero-byte asset.
+
+    A 0-rule style.css (seen rarely, ~1 in 15 reloads) means the file on disk
+    was empty when served — a half-written deploy/save. Browsers cache CSS
+    aggressively, so serving the empty file once can pin an unstyled page.
+    A 503 tells the browser to retry on the next load instead.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        stat = getattr(response, "stat_result", None)
+        if stat is not None and getattr(stat, "st_size", 1) == 0:
+            return PlainTextResponse(
+                "Static asset is empty (still being updated) — please reload.",
+                status_code=503,
+            )
+        return response
+
+
 app.include_router(generate_router)
 app.include_router(export_router)
 app.include_router(cicd.router, prefix="/api")
@@ -75,7 +95,7 @@ app.include_router(execute.router, prefix="/api")
 app.include_router(security.router, prefix="/api")
 app.include_router(openapi.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
-app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "web" / "static")), name="static")
+app.mount("/static", GuardedStaticFiles(directory=str(PROJECT_ROOT / "web" / "static")), name="static")
 
 _STATIC_DIR = PROJECT_ROOT / "web" / "static"
 _INDEX_HTML = PROJECT_ROOT / "web" / "templates" / "index.html"
