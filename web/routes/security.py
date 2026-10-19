@@ -161,6 +161,12 @@ def security_scan(request: Request, payload: ScanRequest) -> Dict[str, Any]:
     scan_duration_ms = int((time.perf_counter() - start) * 1000)
 
     summary = _build_summary(findings)
+    summary["auth_check"] = {
+        "state": scan_context.get("state"),
+        "status": scan_context.get("status"),
+        "credential_headers": scan_context.get("credential_headers", []),
+    }
+    # Legacy keys kept for older UI code paths until the banner replaces them.
     summary["endpoint_is_public"] = scan_context["endpoint_is_public"]
     summary["baseline_status"] = scan_context["baseline_status"]
 

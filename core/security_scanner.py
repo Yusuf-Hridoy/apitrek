@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
+from core.auth_check import classify_auth
 from core.url_guard import safe_request, BlockedURLError
 
 REQUEST_TIMEOUT_SECONDS = 15
@@ -361,21 +362,27 @@ def detect_auth_context(
     headers: Optional[Dict[str, Any]] = None,
     body: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Detect whether the endpoint enforces authentication at all.
+    """Classify the endpoint's auth state from the user's own request.
 
     Fires ONE baseline request (the call as configured, no auth
-    manipulation) for the whole scan. If that request succeeds (2xx) and the
-    user supplied no Authorization header, the endpoint has no auth layer —
-    auth findings are then "not applicable" rather than "vulnerable".
+    manipulation) for the whole scan and classifies the response with the
+    shared classifier — so Cookie/API-key logins (e.g. Restful Booker's
+    ``Cookie: token=…``) are recognized, not just Authorization headers.
+
+    Returns the classify_auth keys plus the legacy keys the UI still reads.
     """
     baseline = _baseline_response(endpoint, method, headers, body)
     if baseline is None:
-        return {"endpoint_is_public": False, "baseline_status": None}
-    has_auth_header = any(k.lower() == "authorization" for k in (headers or {}))
-    endpoint_is_public = 200 <= baseline.status_code < 300 and not has_auth_header
+        check = classify_auth(headers, None)
+    else:
+        check = classify_auth(headers, baseline.status_code)
+    state = check["state"]
     return {
-        "endpoint_is_public": endpoint_is_public,
-        "baseline_status": baseline.status_code,
+        "state": state,
+        "status": check["status"],
+        "credential_headers": check["credential_headers"],
+        "endpoint_is_public": state == "public",
+        "baseline_status": check["status"],
     }
 
 
@@ -477,7 +484,26 @@ def execute_security_test(
     finding_reason = ""
     test_id = str(test.get("id", ""))
 
-    if test_id.startswith(("SEC-API7", "SEC-API10")):
+    # Access tests (API1/API2/API5) are only meaningful when the caller's own
+    # credentials work. A rejected token blocks every request — including the
+    # user's own — so "Secure"/"Vulnerable" there would be false confidence.
+    # A required login means API1/API5 probes can't reach real resources.
+    auth_state = (scan_context or {}).get("state")
+    is_access_test = test_id.startswith(("SEC-API1", "SEC-API2", "SEC-API5"))
+    if is_access_test and auth_state == "rejected":
+        finding = FINDING_NEEDS_REVIEW
+        finding_reason = (
+            "Your own request was rejected too, so this result proves nothing. "
+            "Fix your token and scan again."
+        )
+    elif (
+        is_access_test
+        and auth_state == "required"
+        and not test_id.startswith("SEC-API2")
+    ):
+        finding = FINDING_NEEDS_REVIEW
+        finding_reason = "This needs a working login to test. Add a token and scan again."
+    elif test_id.startswith(("SEC-API7", "SEC-API10")):
         body_l = last.text.lower()
         baseline = _baseline_response(endpoint, method, headers, body)
         base_l = baseline.text.lower() if baseline is not None else ""
