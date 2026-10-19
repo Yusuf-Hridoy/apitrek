@@ -124,7 +124,16 @@ def _build_case_item(case: Dict[str, Any], default_endpoint: str, default_method
     request_body = request_info.get("body")
 
     expected = case.get("expected", {}) or {}
-    script_lines = _build_test_script(expected, sample, stability)
+    skip = case.get("skip")
+    if skip:
+        # Skipped in Apitrek too (e.g. a login test on a public endpoint):
+        # export as a Postman skip, never a fabricated pass. The title is
+        # JSON-escaped like every other dynamic script string.
+        script_lines = [
+            f'pm.test.skip({json.dumps(f"[SKIPPED] {title}")}, function () {{}});',
+        ]
+    else:
+        script_lines = _build_test_script(expected, sample, stability)
 
     item: Dict[str, Any] = {
         "name": f"{case_id} - {title}" if case_id else title,

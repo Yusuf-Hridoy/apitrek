@@ -112,6 +112,21 @@ def _generate_case_tests(cases: List[Dict[str, Any]], prefix: str, sample: Any, 
         doc_parts = [p for p in [case_id, title, description] if p]
         docstring = " - ".join(doc_parts)
 
+        skip = case.get("skip")
+        if skip:
+            # Skipped in Apitrek too (e.g. a login test on a public endpoint):
+            # export as a pytest skip, never a fake pass. The reason is escaped
+            # the same way as every other dynamic string.
+            reason = skip.get("reason", "") if isinstance(skip, dict) else str(skip)
+            tests.append("\n".join([
+                "",
+                f"@pytest.mark.skip(reason={_py_str_literal(reason)})",
+                f"def {name}():",
+                f'    """{_safe_docstring(docstring)}"""',
+                "    pass",
+            ]))
+            continue
+
         # Each case sends the request its scenario describes: the LLM's
         # per-case request object wins; baseline ENDPOINT/HTTP_METHOD only
         # fill in fields the case leaves unset. This is what makes
