@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from core.auth_check import _normalize_expected_status
 from core.database import _SENSITIVE_HEADER_HINTS
 from core.url_guard import safe_request, BlockedURLError
 
@@ -50,20 +51,6 @@ def _get_expected_status(test_case: Dict[str, Any]) -> Any:
         return test_case["expected_status"]
     expected = test_case.get("expected") or {}
     return expected.get("status_code")
-
-
-def _normalize_expected_status(expected: Any) -> Optional[List[int]]:
-    """Expected status can be an int, a numeric string, or a list of them."""
-    if expected is None:
-        return None
-    values = expected if isinstance(expected, (list, tuple)) else [expected]
-    codes: List[int] = []
-    for value in values:
-        try:
-            codes.append(int(value))
-        except (TypeError, ValueError):
-            continue
-    return codes or None
 
 
 def _type_matches(value: Any, word: str) -> bool:
@@ -258,9 +245,28 @@ def execute_test_case(
     Execute a single test case against the live API.
 
     Returns a structured result dict; never raises. Each result carries an
-    ``outcome`` (passed / failed / needs_review / not_run) alongside the
-    boolean ``passed`` kept for compatibility.
+    ``outcome`` (passed / failed / needs_review / not_run / skipped) alongside
+    the boolean ``passed`` kept for compatibility.
     """
+    skip = test_case.get("skip")
+    if skip:
+        # Never sent: a skipped case (e.g. a login test on a public endpoint)
+        # would always fail, so the API is never contacted.
+        reason = skip.get("reason") if isinstance(skip, dict) else str(skip)
+        return {
+            "test_case_id": str(test_case.get("id", "")),
+            "title": test_case.get("title") or test_case.get("rule") or "Untitled",
+            "passed": False,
+            "outcome": "skipped",
+            "expected_status": _get_expected_status(test_case),
+            "actual_status": None,
+            "actual_response_preview": "",
+            "assertion_results": [],
+            "error_message": reason or "This test was skipped.",
+            "duration_ms": 0,
+            "category": test_case.get("category", "positive"),
+        }
+
     category = test_case.get("category", "positive")
     expected_status = _get_expected_status(test_case)
     expected_codes = _normalize_expected_status(expected_status)
@@ -400,6 +406,7 @@ def execute_test_suite(
     failed = sum(1 for r in results if r["outcome"] == "failed")
     needs_review = sum(1 for r in results if r["outcome"] == "needs_review")
     not_run = sum(1 for r in results if r["outcome"] == "not_run")
+    skipped = sum(1 for r in results if r["outcome"] == "skipped")
     decided = passed + failed
     return {
         "results": results,
@@ -408,7 +415,8 @@ def execute_test_suite(
         "failed": failed,
         "needs_review": needs_review,
         "not_run": not_run,
-        "executed_count": len(results) - not_run,
+        "skipped_count": skipped,
+        "executed_count": len(results) - not_run - skipped,
         "duration_ms": sum(r.get("duration_ms", 0) for r in results),
         "pass_rate": f"{round(passed / decided * 100)}%" if decided else "0%",
     }

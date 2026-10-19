@@ -57,6 +57,7 @@ def _build_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     failed = outcomes.count("failed")
     needs_review = outcomes.count("needs_review")
     not_run = outcomes.count("not_run")
+    skipped = outcomes.count("skipped")
     decided = passed + failed
     duration_ms = sum(r.get("duration_ms", 0) for r in results)
     pass_rate = f"{round(passed / decided * 100)}%" if decided else "0%"
@@ -66,7 +67,8 @@ def _build_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "failed": failed,
         "needs_review": needs_review,
         "not_run": not_run,
-        "executed_count": total - not_run,
+        "skipped": skipped,
+        "executed_count": total - not_run - skipped,
         "duration_ms": duration_ms,
         "pass_rate": pass_rate,
     }
