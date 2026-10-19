@@ -80,6 +80,7 @@ def init_db() -> None:
         """)
         _migrate_add_column(conn, "test_cases", "case_ref", "TEXT")
         _migrate_add_column(conn, "execution_results", "outcome", "TEXT")
+        _migrate_add_column(conn, "sessions", "auth_check_json", "TEXT")
 
 
 def _migrate_add_column(
@@ -283,6 +284,7 @@ def save_session(
     body: Optional[Dict[str, Any]] = None,
     sample_response: Optional[Any] = None,
     mode: str = "functional",
+    auth_check: Optional[Dict[str, Any]] = None,
 ) -> int:
     """
     Insert a session row and return its id.
@@ -291,13 +293,17 @@ def save_session(
     database: header values (bearer tokens, API keys, cookies), credential-like
     fields inside the request body and sample response (password, token, ...), and
     secret query-string params in the endpoint URL (?api_key=..., ?sig=...).
+
+    ``auth_check`` holds only header names and the status — never values — so
+    it is safe to persist for the history banner.
     """
     with _connect() as conn:
         cursor = conn.execute(
             """
             INSERT INTO sessions (endpoint, method, headers_json, body_json,
-                                  sample_response_json, created_at, mode)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                                  sample_response_json, created_at, mode,
+                                  auth_check_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 redact_url(endpoint),
@@ -307,6 +313,7 @@ def save_session(
                 json.dumps(redact_body(sample_response)) if sample_response is not None else None,
                 _now(),
                 mode,
+                json.dumps(auth_check) if auth_check is not None else None,
             ),
         )
         return int(cursor.lastrowid)
@@ -426,6 +433,15 @@ def get_session(session_id: int) -> Optional[Dict[str, Any]]:
             session[key.replace("_json", "")] = json.loads(session[key])
         else:
             session[key.replace("_json", "")] = None
+
+    # Rows saved before the auth_check column existed simply have no banner.
+    if session.get("auth_check_json"):
+        try:
+            session["auth_check"] = json.loads(session["auth_check_json"])
+        except (ValueError, TypeError):
+            session["auth_check"] = None
+    else:
+        session["auth_check"] = None
 
     def _decode_case(row: sqlite3.Row) -> Dict[str, Any]:
         case = dict(row)

@@ -25,26 +25,19 @@ def _is_valid_url(url: str) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def fetch_api_response(
+def _send(
     endpoint: str,
-    method: str = "GET",
-    headers: Optional[Dict[str, str]] = None,
-    request_body: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    method: str,
+    headers: Optional[Dict[str, str]],
+    request_body: Optional[Dict[str, Any]],
+) -> requests.Response:
     """
-    Send a real HTTP request and return the parsed JSON response body.
+    Validate the request and send it through the SSRF guard; return the raw
+    response. Shared by fetch_api_response and fetch_with_status so both stay
+    identical on URL checks, timeouts, size limits and HTML rejection.
 
-    Args:
-        endpoint: Full URL to fetch.
-        method: HTTP method (GET, POST, etc.).
-        headers: Optional request headers.
-        request_body: Optional JSON body for POST/PUT/PATCH.
-
-    Returns:
-        Parsed JSON response as a Python dict.
-
-    Raises:
-        LiveFetchError: On any failure with a human-readable message.
+    Raises LiveFetchError for bad URLs/methods, blocked URLs, timeouts,
+    connection errors, oversized responses, HTML bodies and 5xx statuses.
     """
     if not endpoint or not isinstance(endpoint, str):
         raise LiveFetchError("Invalid or missing endpoint URL.")
@@ -125,7 +118,34 @@ def fetch_api_response(
             f"The API returned a server error (status {response.status_code}). "
             "The endpoint may be temporarily unavailable."
         )
-    elif response.status_code == 401:
+
+    return response
+
+
+def fetch_api_response(
+    endpoint: str,
+    method: str = "GET",
+    headers: Optional[Dict[str, str]] = None,
+    request_body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Send a real HTTP request and return the parsed JSON response body.
+
+    Args:
+        endpoint: Full URL to fetch.
+        method: HTTP method (GET, POST, etc.).
+        headers: Optional request headers.
+        request_body: Optional JSON body for POST/PUT/PATCH.
+
+    Returns:
+        Parsed JSON response as a Python dict.
+
+    Raises:
+        LiveFetchError: On any failure with a human-readable message.
+    """
+    response = _send(endpoint, method, headers, request_body)
+
+    if response.status_code == 401:
         raise LiveFetchError(
             "The API returned 401 Unauthorized. Authentication may be required."
         )
@@ -145,6 +165,7 @@ def fetch_api_response(
     if not response.text or not response.text.strip():
         raise LiveFetchError("The API returned an empty response.")
 
+    content_type = response.headers.get("Content-Type", "")
     try:
         parsed = response.json()
     except (requests.exceptions.JSONDecodeError, ValueError):
@@ -160,3 +181,33 @@ def fetch_api_response(
         )
 
     return parsed
+
+
+def fetch_with_status(
+    endpoint: str,
+    method: str = "GET",
+    headers: Optional[Dict[str, str]] = None,
+    request_body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Same request as fetch_api_response (same SSRF guard, size and HTML
+    checks), but reports the status instead of raising on 401/403/404 so the
+    caller can classify the endpoint's auth state.
+
+    Returns:
+        {"status": int, "body": <parsed JSON or None>}
+
+    Raises:
+        LiveFetchError: For 5xx, timeouts, blocked URLs, oversized responses,
+        HTML bodies and invalid URLs/methods — same as fetch_api_response.
+    """
+    response = _send(endpoint, method, headers, request_body)
+    body = None
+    if response.text and response.text.strip():
+        try:
+            parsed = response.json()
+        except (requests.exceptions.JSONDecodeError, ValueError):
+            parsed = None
+        if isinstance(parsed, (dict, list)):
+            body = parsed
+    return {"status": response.status_code, "body": body}

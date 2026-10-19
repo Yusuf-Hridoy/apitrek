@@ -508,6 +508,7 @@ def generate_test_cases(
     method: str = "GET",
     sample_response: Optional[Any] = None,
     mistral_client: Optional[MistralClient] = None,
+    auth_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Generate structured API test cases for the given endpoint.
@@ -519,6 +520,8 @@ def generate_test_cases(
         mistral_client: Optional pre-configured LLM client instance (any client
             with a .send_prompt method). Defaults to AIRouter, which uses
             Mistral with automatic fallback to Groq / GitHub Models.
+        auth_state: Optional auth classification (classify_auth result), told
+            to the AI as context. Header names only — never values.
 
     Returns:
         Dict conforming to the strict output JSON schema, or an error-safe variant.
@@ -542,6 +545,7 @@ def generate_test_cases(
             method=method,
             sample_response=prompt_sample,
             response_metadata=metadata,
+            auth_state=auth_state,
         )
     except Exception as e:
         return _safe_error_response(f"Prompt building failed: {e}")

@@ -25,6 +25,7 @@ def build_user_prompt(
     method: str = "GET",
     sample_response: Optional[Dict[str, Any]] = None,
     response_metadata: Optional[Dict[str, Any]] = None,
+    auth_state: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Build the user prompt for test generation with advanced QA intelligence.
@@ -34,6 +35,8 @@ def build_user_prompt(
         method: HTTP method (GET, POST, PUT, DELETE, PATCH).
         sample_response: Optional sample response body.
         response_metadata: Optional metadata from the analyzer (field types, patterns, etc.).
+        auth_state: Optional auth classification (classify_auth result). Header
+            NAMES only are ever included — never header values.
 
     Returns:
         A formatted prompt string.
@@ -55,10 +58,41 @@ def build_user_prompt(
 - Path parameter type: {param_type}
 - Supported methods: {', '.join(method_hints) if method_hints else 'inferred from URL'}"""
 
+    auth_block = ""
+    if isinstance(auth_state, dict):
+        state = auth_state.get("state")
+        status = auth_state.get("status")
+        names = ", ".join(auth_state.get("credential_headers") or []) or "unknown"
+        if state == "public":
+            auth_block = (
+                "\nAUTHENTICATION CONTEXT: This endpoint returned success without any "
+                "credentials. It does not require authentication. Do not generate test "
+                "cases that expect 401 or 403 for missing or invalid credentials.\n"
+            )
+        elif state == "authenticated":
+            auth_block = (
+                f"\nAUTHENTICATION CONTEXT: The request succeeds with credentials sent "
+                f"in these headers: {names}. Include negative tests for missing and "
+                "invalid credentials.\n"
+            )
+        elif state == "rejected":
+            auth_block = (
+                f"\nAUTHENTICATION CONTEXT: The credentials sent in these headers "
+                f"({names}) were rejected with status {status}, so the endpoint "
+                "requires authentication. Include negative tests for missing and "
+                "invalid credentials.\n"
+            )
+        elif state == "required":
+            auth_block = (
+                f"\nAUTHENTICATION CONTEXT: The endpoint rejected a request with no "
+                f"credentials (status {status}), so it requires authentication. "
+                f"Include a test for missing credentials expecting {status}.\n"
+            )
+
     prompt = f"""Analyze this API like a production QA engineer hunting real bugs.
 
 {endpoint_context}
-
+{auth_block}
 API ENDPOINT: {endpoint}
 HTTP METHOD: {method}
 

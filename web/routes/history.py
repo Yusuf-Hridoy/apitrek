@@ -48,14 +48,20 @@ def _rebuild_executor_cases(session: Dict[str, Any]) -> list:
             expected["status_code"] = tc["expected_status"]
         if tc.get("assertions"):
             expected["validation_rules"] = tc["assertions"]
+        payload = tc.get("payload") or {}
+        # A stored skip marker rides inside the payload (see generate.py);
+        # split it out so the runner skips the case without sending anything.
+        skip = payload.get("skip") if isinstance(payload, dict) else None
+        request = {k: v for k, v in payload.items() if k != "skip"} if skip else payload
         cases.append({
             # Prefer the original LLM id so rerun results key the same way a live
             # run does; fall back to the DB row id for legacy rows without one.
             "id": str(tc.get("case_ref") or tc.get("id", "")),
             "title": tc.get("title") or "Untitled",
             "category": tc.get("category") or "positive",
-            "request": tc.get("payload") or {},
+            "request": request,
             "expected": expected,
+            "skip": skip,
         })
     return cases
 

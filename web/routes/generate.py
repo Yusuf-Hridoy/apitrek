@@ -14,7 +14,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.generator import generate_test_cases
-from core.live_fetcher import fetch_api_response, LiveFetchError
+from core.auth_check import classify_auth, is_auth_test
+from core.live_fetcher import fetch_api_response, fetch_with_status, LiveFetchError
 from core.stability_check import (
     apply_stability_to_assertions,
     compare_responses,
@@ -37,13 +38,18 @@ def _cases_for_db(result: Dict[str, Any]) -> list:
     ):
         for case in result.get(key) or []:
             expected = case.get("expected") or {}
+            # The skip marker rides inside the stored payload so restored
+            # sessions keep it; it is split back out on history reload.
+            case_payload = case.get("request")
+            if case.get("skip"):
+                case_payload = {**(case_payload or {}), "skip": case["skip"]}
             rows.append({
                 "category": category,
                 "title": case.get("title"),
                 "description": case.get("description"),
                 "expected_status": expected.get("status_code"),
                 "assertions": expected.get("validation_rules"),
-                "payload": case.get("request"),
+                "payload": case_payload,
                 # Original LLM id (e.g. "TC-POS-01") — lets history reload match
                 # stored execution results back to their restored cards.
                 "case_ref": case.get("id"),
@@ -118,47 +124,61 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
     method = payload.method.upper()
     sample_response = payload.sample_response
     stability = None
+    auth_check = None
 
     if payload.auto_fetch:
-        try:
-            # Coerce header values to strings for safe HTTP transmission
-            headers = None
-            if payload.headers:
-                headers = {str(k): str(v) for k, v in payload.headers.items()}
+        # Coerce header values to strings for safe HTTP transmission
+        headers = None
+        if payload.headers:
+            headers = {str(k): str(v) for k, v in payload.headers.items()}
 
-            fetched = fetch_api_response(
+        # 401/403 no longer abort generation: the status is reported back so
+        # the auth state can be classified and shown to the user. Hard fetch
+        # failures (5xx, timeouts, blocked URLs) still abort with a 502.
+        try:
+            result_fetch = fetch_with_status(
                 endpoint=endpoint,
                 method=method,
                 headers=headers,
                 request_body=payload.request_body,
             )
-            sample_response = fetched
         except LiveFetchError as e:
             raise HTTPException(status_code=502, detail=str(e))
+        auth_check = classify_auth(headers, result_fetch["status"])
+        if 200 <= result_fetch["status"] < 300:
+            sample_response = result_fetch["body"]
+        else:
+            # An error body is not the endpoint's real response.
+            sample_response = None
 
         if payload.stability_check:
-            if method == "GET":
-                try:
-                    # Two more calls through the same SSRF-guarded path. A
-                    # repeat-call failure never breaks generation.
-                    extra = [
-                        fetch_api_response(
-                            endpoint=endpoint,
-                            method=method,
-                            headers=headers,
-                            request_body=payload.request_body,
+            if 200 <= result_fetch["status"] < 300:
+                if method == "GET":
+                    try:
+                        # Two more calls through the same SSRF-guarded path. A
+                        # repeat-call failure never breaks generation.
+                        extra = [
+                            fetch_api_response(
+                                endpoint=endpoint,
+                                method=method,
+                                headers=headers,
+                                request_body=payload.request_body,
+                            )
+                            for _ in range(2)
+                        ]
+                        stability = compare_responses([sample_response, *extra])
+                    except LiveFetchError:
+                        stability = stability_skipped(
+                            "A repeat call failed, so stability couldn't be checked."
                         )
-                        for _ in range(2)
-                    ]
-                    stability = compare_responses([sample_response, *extra])
-                except LiveFetchError:
+                else:
                     stability = stability_skipped(
-                        "A repeat call failed, so stability couldn't be checked."
+                        "Stability check runs on GET only, so repeat calls can't "
+                        "create or change data."
                     )
             else:
                 stability = stability_skipped(
-                    "Stability check runs on GET only, so repeat calls can't "
-                    "create or change data."
+                    "Your request was rejected, so stability wasn't checked."
                 )
     elif payload.stability_check:
         stability = stability_skipped("Turn on auto-fetch to run the stability check.")
@@ -167,6 +187,7 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
         endpoint=endpoint,
         method=method,
         sample_response=sample_response,
+        auth_state=auth_check,
     )
 
     if "_error" in result:
@@ -175,6 +196,18 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
     # expose the fetched response so exporters can build schema-driven assertions
     if sample_response is not None:
         result["sample_response"] = sample_response
+
+    if auth_check is not None:
+        result["auth_check"] = auth_check
+        if auth_check["state"] == "public":
+            # The AI may still write login tests. On a public endpoint they can
+            # never pass — keep them visible but mark them skipped (never sent).
+            for key in ("positive_test_cases", "negative_test_cases", "edge_cases"):
+                for case in result.get(key) or []:
+                    if isinstance(case, dict) and is_auth_test(case):
+                        case["skip"] = {
+                            "reason": "No login needed here, so a test expecting 401 or 403 can't pass."
+                        }
 
     # Tag assertions with per-field stability; the strip summarises the rest.
     # apply_stability_to_assertions pops the internal raw-values key, so only
@@ -192,6 +225,7 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
             headers=payload.headers,
             body=payload.request_body,
             sample_response=sample_response,
+            auth_check=auth_check,
         )
         save_test_cases(session_id, _cases_for_db(result))
         result["_session_id"] = session_id
