@@ -73,20 +73,29 @@ def build_user_prompt(
             auth_block = (
                 f"\nAUTHENTICATION CONTEXT: The request succeeds with credentials sent "
                 f"in these headers: {names}. Include negative tests for missing and "
-                "invalid credentials.\n"
+                f"invalid credentials. The login travels in these headers ({names}) — "
+                "target them in negative auth tests, not `Authorization`.\n"
             )
         elif state == "rejected":
+            header_hint = (
+                f"The login travels in these headers ({names}) — target them in "
+                "negative auth tests, not `Authorization`. "
+            ) if auth_state.get("credential_headers") else ""
             auth_block = (
                 f"\nAUTHENTICATION CONTEXT: The credentials sent in these headers "
                 f"({names}) were rejected with status {status}, so the endpoint "
                 "requires authentication. Include negative tests for missing and "
-                "invalid credentials.\n"
+                f"invalid credentials. {header_hint}"
+                f"A rejected request returns {status} — expect {status}, not 401, "
+                "in negative auth tests.\n"
             )
         elif state == "required":
             auth_block = (
                 f"\nAUTHENTICATION CONTEXT: The endpoint rejected a request with no "
                 f"credentials (status {status}), so it requires authentication. "
-                f"Include a test for missing credentials expecting {status}.\n"
+                f"Include a test for missing credentials expecting {status}. "
+                f"A request without credentials returns {status} — expect {status}, "
+                "not 401, in negative auth tests.\n"
             )
 
     prompt = f"""Analyze this API like a production QA engineer hunting real bugs.
