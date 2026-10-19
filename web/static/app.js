@@ -67,6 +67,63 @@ document.addEventListener('DOMContentLoaded', () => {
         return el;
     }
 
+    // --- Login-state banner (shared by functional + security results) ---
+    // Shows how the endpoint responded to the user's OWN request. Credential
+    // header NAMES may appear; values never do. No auth_check (auto-fetch
+    // off or an old saved session) renders nothing and removes any old banner.
+    function renderAuthBanner(container, authCheck) {
+        const id = container === securityResults ? 'scanAuthBanner' : 'authBanner';
+        const el = document.getElementById(id);
+        if (!authCheck || !authCheck.state) {
+            if (el) el.remove();
+            return;
+        }
+        const statusText = authCheck.status != null ? authCheck.status : 'no response';
+        const names = (authCheck.credential_headers || []).join(', ');
+        const config = {
+            public: {
+                cls: 'auth-banner--neutral', icon: 'ℹ️',
+                title: 'No login needed',
+                body: `Your request worked without a token (${statusText}). Login tests are skipped, because they would always fail.`,
+            },
+            authenticated: {
+                cls: 'auth-banner--ok', icon: '✅',
+                title: 'Your login works',
+                body: `Your request with ${names} (hidden) worked (${statusText}). Login tests and access checks will give real results.`,
+            },
+            rejected: {
+                cls: 'auth-banner--bad', icon: '❌',
+                title: `Your token was rejected (${statusText})`,
+                body: "Your own request was blocked, so the token is wrong or expired. Get a fresh token and run again. Until then, login results can't be trusted.",
+            },
+            required: {
+                cls: 'auth-banner--warn', icon: '⚠️',
+                title: 'This endpoint needs a login',
+                body: `You sent no token and got blocked (${statusText}). Use Paste cURL to add one from your browser.`,
+            },
+            unknown: {
+                cls: 'auth-banner--neutral', icon: 'ℹ️',
+                title: "Couldn't check login",
+                body: `Your request returned ${statusText}, so Apitrek couldn't tell whether a login is needed.`,
+            },
+        };
+        const c = config[authCheck.state] || config.unknown;
+        let banner = el;
+        if (!banner) {
+            banner = document.createElement('div');
+            container.insertBefore(banner, container.firstChild);
+        }
+        banner.id = id;
+        banner.className = `auth-banner ${c.cls}`;
+        banner.setAttribute('role', 'status');
+        banner.innerHTML =
+            `<span class="auth-banner-icon" aria-hidden="true">${c.icon}</span>` +
+            `<div class="auth-banner-text">` +
+            `<p class="auth-banner-title">${escapeHtml(c.title)}</p>` +
+            `<p class="auth-banner-body">${escapeHtml(c.body)}</p>` +
+            `</div>`;
+    }
+
     function countGeneratedAssertions(data) {
         if (!data) return 0;
         let n = (data.assertions || []).length;
@@ -81,7 +138,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Re-tally executed assertions across all run case cards and refresh the
     // functional scorecard. Before any run it shows the not-run state.
     function refreshFunctionalScorecard() {
-        const slot = scorecardSlot(resultsSection, 'scorecard');
+        // The login banner (when present) is the panel's first element; the
+        // scorecard slots directly below it.
+        const bannerEl = document.getElementById('authBanner');
+        const slot = scorecardSlot(resultsSection, 'scorecard', bannerEl || undefined);
         let verified = 0, needsReview = 0, failed = 0, total = 0;
         caseCards.forEach((entry) => {
             if (!entry.execResult) return;
@@ -640,7 +700,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Execution outcomes -------------------------------------------------
-    // Four honest outcomes; `passed` boolean kept for older saved results.
+    // Five honest outcomes; `passed` boolean kept for older saved results.
     function outcomeOf(result) {
         return result.outcome || (result.passed ? 'passed' : 'failed');
     }
@@ -662,19 +722,46 @@ document.addEventListener('DOMContentLoaded', () => {
             verdict: 'Not run', badge: 'NOT RUN', badgeClass: 'not-run',
             cardClass: 'test-notrun', stripClass: 'outcome--skipped',
         },
+        skipped: {
+            verdict: 'Skipped', badge: 'SKIPPED', badgeClass: 'skipped',
+            cardClass: 'test-skipped', stripClass: 'outcome--skipped',
+        },
     };
 
-    function buildDetailsHtml(result) {
+    // True when a case expects only 401/403 — a login test.
+    function expectsOnlyAuthStatuses(data) {
+        const expected = data && (data.expected_status !== undefined
+            ? data.expected_status
+            : (data.expected && data.expected.status_code));
+        if (expected === undefined || expected === null) return false;
+        const list = Array.isArray(expected) ? expected : [expected];
+        const codes = list.map(Number).filter((n) => Number.isInteger(n));
+        return codes.length > 0 && codes.every((n) => n === 401 || n === 403);
+    }
+
+    function buildDetailsHtml(result, caseData) {
         const ui = OUTCOME_UI[outcomeOf(result)] || OUTCOME_UI.failed;
         let html = `<div class="outcome ${ui.stripClass}">
             <span class="outcome-verdict">${ui.verdict}</span>
-            <span class="outcome-status">expected ${result.expected_status ?? '—'} &rarr; got ${result.actual_status}</span>
+            <span class="outcome-status">expected ${result.expected_status ?? '—'} &rarr; got ${result.actual_status ?? '—'}</span>
         </div>`;
 
         if (result.error_message) {
-            // A refused/blocked request is neutral info, not a red failure.
-            const errClass = outcomeOf(result) === 'not_run' ? 'detail-row' : 'detail-row assertion-fail';
+            // A refused/blocked/skipped request is neutral info, not a red failure.
+            const neutral = outcomeOf(result) === 'not_run' || outcomeOf(result) === 'skipped';
+            const errClass = neutral ? 'detail-row' : 'detail-row assertion-fail';
             html += `<div class="${errClass}">${escapeHtml(result.error_message)}</div>`;
+        }
+
+        // When the user's own credentials are rejected (or missing), a 401/403
+        // on a non-login test means the login wall blocked it — say so instead
+        // of letting it read as an ordinary failure.
+        const authCheck = lastResult && lastResult.auth_check;
+        if (authCheck && (authCheck.state === 'rejected' || authCheck.state === 'required')
+            && outcomeOf(result) === 'failed'
+            && (result.actual_status === 401 || result.actual_status === 403)
+            && !expectsOnlyAuthStatuses(caseData)) {
+            html += `<div class="detail-row login-blocked-note">Blocked by login before anything else was checked — see the banner above.</div>`;
         }
 
         if (Array.isArray(result.assertion_results) && result.assertion_results.length) {
@@ -714,7 +801,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function applyExecutionResult(entry, result) {
         entry.execResult = result;
         const ui = OUTCOME_UI[outcomeOf(result)] || OUTCOME_UI.failed;
-        entry.el.classList.remove('test-pass', 'test-fail', 'test-review', 'test-notrun');
+        entry.el.classList.remove('test-pass', 'test-fail', 'test-review', 'test-notrun', 'test-skipped');
         entry.el.classList.add(ui.cardClass);
 
         // Status badge in the compact row
@@ -722,7 +809,7 @@ document.addEventListener('DOMContentLoaded', () => {
         badge.className = `status-badge ${ui.badgeClass}`;
         badge.textContent = ui.badge;
 
-        entry.detailsEl.innerHTML = buildDetailsHtml(result);
+        entry.detailsEl.innerHTML = buildDetailsHtml(result, entry.data);
         entry.detailsEl.classList.remove('hidden');
         // Reveal the card body so the outcome is visible; auto-expand on failure.
         if (outcomeOf(result) === 'failed') {
@@ -730,6 +817,47 @@ document.addEventListener('DOMContentLoaded', () => {
             entry.el.classList.add('open');
         }
         entry.runBtn.textContent = 'Re-run';
+    }
+
+    // A skipped case is never sent — not even to Apitrek's own run endpoint.
+    function skippedResult(entry) {
+        const skip = entry.data.skip || {};
+        return {
+            passed: false,
+            outcome: 'skipped',
+            expected_status: entry.data.expected ? entry.data.expected.status_code ?? null : null,
+            actual_status: null,
+            assertion_results: [],
+            actual_response_preview: '',
+            error_message: skip.reason || 'This test was skipped.',
+        };
+    }
+
+    // When Apitrek's OWN /api/execute-single call fails, the API was never
+    // tested — record "not run" with a plain reason instead of a red FAILED.
+    function notRunReason(err) {
+        if (err && err.status === 403 && !err.hasDetail) {
+            return "Not sent: Apitrek's hosting firewall blocked this request, likely because of the test payload. The API was never contacted.";
+        }
+        if (err && err.status === 429) {
+            return "Not sent: Apitrek's rate limit was reached. Wait a minute and run it again.";
+        }
+        if (err && !err.status) {
+            return "Not sent: couldn't reach Apitrek's server. Check your connection and try again.";
+        }
+        return (err && err.message) || 'Execution failed';
+    }
+
+    function notRunResult(err) {
+        return {
+            passed: false,
+            outcome: 'not_run',
+            expected_status: null,
+            actual_status: null,
+            assertion_results: [],
+            actual_response_preview: '',
+            error_message: notRunReason(err),
+        };
     }
 
     async function executeOne(entry) {
@@ -748,7 +876,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-            throw new Error(data.detail || `Execution failed (${res.status})`);
+            // Carry the status so the catch can tell a firewall block / rate
+            // limit / network failure apart from an ordinary error detail.
+            const err = new Error(data.detail || `Execution failed (${res.status})`);
+            err.status = res.status;
+            err.hasDetail = Boolean(data.detail);
+            throw err;
         }
         return data;
     }
@@ -758,13 +891,13 @@ document.addEventListener('DOMContentLoaded', () => {
         entry.runBtn.disabled = true;
         entry.runBtn.textContent = 'Running...';
         try {
-            const result = await executeOne(entry);
+            const result = entry.data.skip ? skippedResult(entry) : await executeOne(entry);
             applyExecutionResult(entry, result);
             refreshFunctionalScorecard();
             validateContract(result);
         } catch (err) {
-            showError(err.message || 'Execution failed. Is the server running?');
-            entry.runBtn.textContent = 'Run';
+            applyExecutionResult(entry, notRunResult(err));
+            refreshFunctionalScorecard();
         } finally {
             entry.runBtn.disabled = false;
         }
@@ -790,6 +923,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let failed = 0;
         let needsReview = 0;
         let notRun = 0;
+        let skipped = 0;
         let totalDuration = 0;
         let lastExecution = null;
 
@@ -798,7 +932,7 @@ document.addEventListener('DOMContentLoaded', () => {
             executionProgressText.textContent = `Running test ${i + 1} of ${total}...`;
             executionProgressFill.style.width = `${(i / total) * 100}%`;
             try {
-                const result = await executeOne(entry);
+                const result = entry.data.skip ? skippedResult(entry) : await executeOne(entry);
                 applyExecutionResult(entry, result);
                 lastExecution = result;
                 totalDuration += result.duration_ms || 0;
@@ -806,18 +940,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (outcome === 'passed') { passed++; }
                 else if (outcome === 'failed') { failed++; }
                 else if (outcome === 'needs_review') { needsReview++; }
+                else if (outcome === 'skipped') { skipped++; }
                 else { notRun++; }
             } catch (err) {
-                failed++;
-                applyExecutionResult(entry, {
-                    passed: false,
-                    outcome: 'failed',
-                    expected_status: null,
-                    actual_status: 0,
-                    assertion_results: [],
-                    actual_response_preview: '',
-                    error_message: err.message || 'Execution failed',
-                });
+                // Apitrek's own call failed (firewall, rate limit, network) —
+                // the API was never contacted, so this is "not run", not failed.
+                notRun++;
+                applyExecutionResult(entry, notRunResult(err));
             }
         }
 
@@ -825,8 +954,8 @@ document.addEventListener('DOMContentLoaded', () => {
         executionProgressText.textContent = 'Done';
         refreshFunctionalScorecard();
         if (lastExecution) validateContract(lastExecution);
-        // Pass rate counts only decided cases — needs-review and not-run are
-        // honest non-answers, not failures.
+        // Pass rate counts only decided cases — needs-review, not-run and
+        // skipped are honest non-answers, not failures.
         const decided = passed + failed;
         const rate = decided ? Math.round((passed / decided) * 100) : 0;
         let barHtml = '';
@@ -834,6 +963,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (failed) barHtml += `<span>❌ ${failed} Failed</span>`;
         if (needsReview) barHtml += `<span>⚠ ${needsReview} Needs review</span>`;
         if (notRun) barHtml += `<span>⊘ ${notRun} Not run</span>`;
+        if (skipped) barHtml += `<span>⊘ ${skipped} Skipped</span>`;
         barHtml += `<span>📊 ${rate}%</span>` +
             `<span>⏱️ ${totalDuration}ms</span>` +
             `<button type="button" class="summary-dismiss" aria-label="Dismiss">&times;</button>`;
@@ -984,9 +1114,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Endpoints with no auth layer: the scanner detects this from a baseline
     // request and marks auth findings "Needs Review" — say so next to the score.
+    // When the scan carries an auth_check, the login banner says it instead.
     function renderRiskContextNote(data) {
         if (!riskContextNote) return;
         const s = (data && data.summary) || {};
+        if (s.auth_check) {
+            riskContextNote.classList.add('hidden');
+            return;
+        }
         if (s.endpoint_is_public === true) {
             riskContextNote.textContent = 'This endpoint requires no authentication (a normal request succeeds without credentials), so access-control findings are marked "Needs Review" rather than vulnerabilities. Scan an authenticated API for a meaningful risk score.';
             riskContextNote.classList.remove('hidden');
@@ -1026,6 +1161,9 @@ document.addEventListener('DOMContentLoaded', () => {
         riskScoreFill.style.width = `${data.risk_score || 0}%`;
         riskScoreFill.className = `risk-score-fill ${band.cls}`;
         riskScoreLabel.textContent = `Risk Score: ${data.risk_score}/100 — ${band.label}`;
+        // The login banner replaces the old grey "requires no authentication"
+        // paragraph — never show both.
+        renderAuthBanner(securityResults, (data.summary || {}).auth_check);
         renderRiskContextNote(data);
 
         const s = data.summary || {};
@@ -1699,6 +1837,17 @@ document.addEventListener('DOMContentLoaded', () => {
             if (Array.isArray(tc.assertions) && tc.assertions.length) {
                 expected.validation_rules = tc.assertions;
             }
+            // A skip marker rides inside the stored payload (see generate.py);
+            // split it back out so the card, the runner and the exports see it
+            // at the top level, the same shape as a fresh generation result.
+            const storedPayload = tc.payload || undefined;
+            let request = storedPayload;
+            let skip = null;
+            if (storedPayload && storedPayload.skip) {
+                skip = storedPayload.skip;
+                request = Object.assign({}, storedPayload);
+                delete request.skip;
+            }
             result[key].push({
                 // Prefer the original LLM id (e.g. "TC-POS-01") so this matches the
                 // fresh-generate shape, live-run results, and future reruns. _dbId
@@ -1708,7 +1857,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 title: tc.title || 'Untitled',
                 description: tc.description || '',
                 expected,
-                request: tc.payload || undefined,
+                request,
+                skip: skip || undefined,
             });
         });
         return result;
@@ -1773,6 +1923,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const cases = s.test_cases || [];
             if (!isSecurity && cases.length) {
                 const restored = reshapeStoredCases(cases);
+                restored.auth_check = s.auth_check || null;
                 lastResult = restored;
                 lastSessionId = id;
                 renderResults(restored);
@@ -1943,6 +2094,7 @@ document.addEventListener('DOMContentLoaded', () => {
         executionSummary.classList.add('hidden');
         executionProgress.classList.add('hidden');
         contractPanel.classList.add('hidden');
+        renderAuthBanner(resultsSection, data.auth_check);
         const positive = data.positive_test_cases || [];
         const negative = data.negative_test_cases || [];
         const edge = data.edge_cases || [];
@@ -2054,15 +2206,26 @@ document.addEventListener('DOMContentLoaded', () => {
                    </details>`
                 : '';
 
+            // Skipped cases (e.g. login tests on a public endpoint) are never
+            // sent — grey badge up front and the reason under the title.
+            const skip = c.skip || null;
+            const badgeHtml = skip
+                ? '<span class="status-badge skipped">SKIPPED</span>'
+                : '<span class="status-badge pending">PENDING</span>';
+            const skipHtml = skip
+                ? `<div class="case-skip-note">⊘ ${escapeHtml(skip.reason || 'This test was skipped.')}</div>`
+                : '';
+
             el.innerHTML = `
                 <div class="case-row">
-                    <span class="status-badge pending">PENDING</span>
+                    ${badgeHtml}
                     <span class="case-id">${escapeHtml(c.id || '')}</span>
                     <span class="case-title">${escapeHtml(c.title || 'Untitled')}</span>
                     <span class="case-row-meta">${statusTag}${extraTags}</span>
                     <button type="button" class="btn-run">Run</button>
                     <span class="chevron">&#9662;</span>
                 </div>
+                ${skipHtml}
                 <div class="case-body hidden">
                     <div class="case-details hidden"></div>
                     ${descHtml}
