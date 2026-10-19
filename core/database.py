@@ -81,6 +81,7 @@ def init_db() -> None:
         _migrate_add_column(conn, "test_cases", "case_ref", "TEXT")
         _migrate_add_column(conn, "execution_results", "outcome", "TEXT")
         _migrate_add_column(conn, "sessions", "auth_check_json", "TEXT")
+        _migrate_add_column(conn, "execution_results", "assertion_results_json", "TEXT")
 
 
 def _migrate_add_column(
@@ -358,11 +359,35 @@ def save_test_cases(session_id: int, test_cases: List[Dict[str, Any]]) -> int:
     return len(rows)
 
 
+def _redact_assertion_results(results: Any) -> Any:
+    """Mask credential-bearing URL query params inside stored check text.
+
+    ``detail`` strings contain the "Request sent" line, which includes the
+    URL — secrets in the query string (?api_key=...) must not reach disk.
+    Values themselves are never present (the runner logs header names only),
+    so masking the URL is sufficient.
+    """
+    if not isinstance(results, list):
+        return None
+    out = []
+    for entry in results:
+        if not isinstance(entry, dict):
+            continue
+        item = dict(entry)
+        for key in ("assertion", "detail"):
+            if isinstance(item.get(key), str):
+                item[key] = redact_url(item[key])
+        out.append(item)
+    return out
+
+
 def save_execution_results(session_id: int, results: List[Dict[str, Any]]) -> int:
     """Persist execution results for a session. Returns rows inserted."""
     now = _now()
-    rows = [
-        (
+
+    def _row(r: Dict[str, Any]):
+        checks = _redact_assertion_results(r.get("assertion_results"))
+        return (
             session_id,
             str(r.get("test_case_id", "")),
             1 if r.get("passed") else 0,
@@ -372,9 +397,10 @@ def save_execution_results(session_id: int, results: List[Dict[str, Any]]) -> in
             r.get("duration_ms"),
             now,
             r.get("outcome"),
+            json.dumps(checks) if checks else None,
         )
-        for r in results
-    ]
+
+    rows = [_row(r) for r in results]
     if not rows:
         return 0
     with _connect() as conn:
@@ -383,8 +409,8 @@ def save_execution_results(session_id: int, results: List[Dict[str, Any]]) -> in
             INSERT INTO execution_results (session_id, test_case_id, passed,
                                            actual_status, actual_response,
                                            error_message, duration_ms, executed_at,
-                                           outcome)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                           outcome, assertion_results_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -457,6 +483,19 @@ def get_session(session_id: int) -> Optional[Dict[str, Any]]:
         # boolean: passed -> "passed", anything else -> "failed".
         if not result.get("outcome"):
             result["outcome"] = "passed" if result.get("passed") else "failed"
+        # Rows saved before assertion detail was persisted simply restore
+        # with no per-check breakdown (scorecard shows the not-run state).
+        raw_checks = result.get("assertion_results_json")
+        if raw_checks:
+            try:
+                parsed_checks = json.loads(raw_checks)
+            except (ValueError, TypeError):
+                parsed_checks = []
+            result["assertion_results"] = (
+                parsed_checks if isinstance(parsed_checks, list) else []
+            )
+        else:
+            result["assertion_results"] = []
         restored_results.append(result)
     session["execution_results"] = restored_results
     return session

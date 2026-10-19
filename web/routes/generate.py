@@ -22,7 +22,7 @@ from core.stability_check import (
     stability_skipped,
 )
 from web.limiter import limiter, LIMIT_GENERATE
-from core.database import save_session, save_test_cases
+from core.database import save_session, save_test_cases, delete_session
 
 router = APIRouter(tags=["generate"])
 logger = logging.getLogger(__name__)
@@ -217,7 +217,9 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
             apply_stability_to_assertions(result.get("assertions") or [], stability)
         result["stability"] = stability
 
-    # Persist the session for history (best-effort; never breaks generation)
+    # Persist the session for history (best-effort; never breaks generation).
+    # The mode is passed explicitly so functional runs never land in the
+    # security history bucket.
     try:
         session_id = save_session(
             endpoint=endpoint,
@@ -225,10 +227,20 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
             headers=payload.headers,
             body=payload.request_body,
             sample_response=sample_response,
+            mode="functional",
             auth_check=auth_check,
         )
-        save_test_cases(session_id, _cases_for_db(result))
-        result["_session_id"] = session_id
+        try:
+            save_test_cases(session_id, _cases_for_db(result))
+        except Exception as e:
+            # Cases are the point of a history row — a session that saved no
+            # test rows would reload as a useless "0 tests" entry. Drop the
+            # session instead of leaving a misleading one behind.
+            logger.warning("Failed to save test cases for %s: %s", endpoint, e)
+            delete_session(session_id)
+            session_id = None
+        if session_id is not None:
+            result["_session_id"] = session_id
     except Exception as e:
         logger.warning("Failed to save session for %s: %s", endpoint, e)
 

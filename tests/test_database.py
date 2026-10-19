@@ -414,6 +414,55 @@ def test_execution_outcome_round_trip(db):
     assert [r["outcome"] for r in results] == ["passed", "not_run", "needs_review"]
 
 
+def test_assertion_results_round_trip(db):
+    """Per-check detail persists so a restored session can rebuild its
+    scorecard exactly as it looked live."""
+    session_id = db.save_session(endpoint="https://api.example.com/x", method="GET")
+    db.save_execution_results(session_id, [{
+        "test_case_id": "TC-POS-01", "passed": True, "outcome": "passed",
+        "actual_status": 200,
+        "assertion_results": [
+            {"kind": "info", "assertion": "Request sent",
+             "detail": "GET https://api.example.com/x · no headers · no body"},
+            {"assertion": "Status code is 200", "passed": True,
+             "detail": "Expected HTTP 200, got 200", "verifiable": True},
+            {"assertion": "field 'price' is a number", "passed": True,
+             "detail": "field 'price' present, type number OK", "verifiable": True},
+        ],
+    }])
+    results = db.get_session(session_id)["execution_results"]
+    checks = results[0]["assertion_results"]
+    assert len(checks) == 3
+    assert checks[1]["assertion"] == "Status code is 200"
+    assert checks[1]["passed"] is True
+
+
+def test_assertion_results_missing_for_legacy_rows(db):
+    """Rows saved before the assertion_results column existed restore with an
+    empty list — the scorecard just shows the not-run state."""
+    session_id = db.save_session(endpoint="https://api.example.com/x", method="GET")
+    db.save_execution_results(session_id, [{"test_case_id": "TC-1", "passed": True}])
+    results = db.get_session(session_id)["execution_results"]
+    assert results[0]["assertion_results"] == []
+
+
+def test_assertion_results_mask_url_query_secrets(db):
+    """The 'Request sent' line embeds the URL — query-string secrets must not
+    reach disk inside assertion detail either."""
+    session_id = db.save_session(endpoint="https://api.example.com/x", method="GET")
+    db.save_execution_results(session_id, [{
+        "test_case_id": "TC-1", "passed": True,
+        "assertion_results": [
+            {"kind": "info", "assertion": "Request sent",
+             "detail": "GET https://api.example.com/x?api_key=TOPSECRET · no body"},
+        ],
+    }])
+    results = db.get_session(session_id)["execution_results"]
+    stored = json.dumps(results[0]["assertion_results"])
+    assert "TOPSECRET" not in stored
+    assert db.REDACTED in stored
+
+
 def test_null_outcome_restores_from_passed(db):
     """Rows saved before the outcome column existed fall back to the boolean."""
     session_id = db.save_session(endpoint="https://api.example.com/x", method="GET")
