@@ -156,13 +156,18 @@ def _build_request(
     """
     Build the HTTP request for a test case — the same request its export
     would send. Cases carry their own ``request`` object; it wins over the
-    form for body and (per category) headers:
+    form for the body, and case headers apply on top of the form headers,
+    with one hard rule that holds for EVERY category:
 
-      - positive / assertion: form headers first, then case headers on top
-        (so a positive test runs with the user's real credentials)
-      - negative / edge: form headers minus sensitive/auth headers, then
-        case headers on top — the case is authoritative for auth
+      - a case header that carries a credential (Authorization, Cookie, API
+        key, ...) is the AI guessing — it is IGNORED. The form's real
+        credential always wins; if the form has none, the invented header is
+        dropped rather than send a fabricated ``token=valid123``. A negative
+        test may only drop or change the one thing it attacks; it never gets
+        to swap the user's real login for a fake one.
+      - any other case header applies on top of the form's
       - a case header with an empty-string value means "omit this header"
+        (non-credential headers only)
 
     A case with no ``request`` at all falls back to a generic per-category
     mutation; the returned notes say so explicitly.
@@ -177,28 +182,20 @@ def _build_request(
         url = tc_request.get("endpoint") or endpoint
         req_method = (tc_request.get("method") or method or "GET").upper()
 
-        category = test_case.get("category", "positive")
-        if category in ("negative", "edge"):
-            # The case is authoritative for auth: "missing Authorization"
-            # really sends none. Start from the form headers minus secrets.
-            req_headers = {
-                k: v for k, v in (headers or {}).items() if not _is_sensitive_header(k)
-            }
-        else:
-            req_headers = dict(headers or {})
+        req_headers = dict(headers or {})
         for key, value in (tc_request.get("headers") or {}).items():
+            if _is_sensitive_header(key):
+                # The AI often writes a fabricated credential into the case.
+                # The user's real credentials are kept on every test; an
+                # invented credential (with or without a real counterpart) is
+                # never sent. Real missing/invalid-auth probing lives in the
+                # security scan, which does it cookie-aware and deliberately.
+                continue
             if value == "":
                 # Explicit "omit this header"
                 req_headers.pop(key, None)
-            elif (
-                category in ("negative", "edge")
-                or not _is_sensitive_header(key)
-                or not any(k.lower() == key.lower() for k in (headers or {}))
-            ):
+            else:
                 req_headers[key] = value
-            # else: a positive/assertion case tried to overwrite a credential
-            # header the form already supplies (the AI often writes a fake
-            # token into the case). The user's real credentials win.
 
         if "body" in tc_request:
             # The case body wins even when it is None or {} — deliberate.

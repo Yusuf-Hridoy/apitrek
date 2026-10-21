@@ -192,24 +192,29 @@ def _case_with_request(category, headers=None, body="__unset__", **extra):
 
 
 @patch("core.test_executor.safe_request")
-def test_negative_missing_auth_sends_no_auth(mock_request):
+def test_negative_case_keeps_form_credentials(mock_request):
+    """A negative case may attack the body or a plain header, but it never
+    drops the user's real login — the case's non-credential headers still
+    apply on top of the form's."""
     mock_request.return_value = _mock_response(status=401)
     case = _case_with_request("negative", headers={"Accept": "application/json"})
     execute_test_case(case, ENDPOINT, "POST", headers={"Authorization": "Bearer real"})
     _, kwargs = mock_request.call_args
-    assert "Authorization" not in kwargs["headers"]
+    assert kwargs["headers"]["Authorization"] == "Bearer real"
     assert kwargs["headers"]["Accept"] == "application/json"
 
 
 @patch("core.test_executor.safe_request")
-def test_negative_case_auth_header_is_authoritative(mock_request):
-    mock_request.return_value = _mock_response(status=401)
+def test_negative_case_fake_credential_is_dropped(mock_request):
+    """The AI writes a fabricated credential into the case (token=valid123).
+    It must never be sent — the form's real credential wins on every test,
+    including negative/edge ones."""
+    mock_request.return_value = _mock_response(status=403)
     case = _case_with_request(
         "negative", headers={"Authorization": "Bearer expired"})
     execute_test_case(case, ENDPOINT, "POST", headers={"Authorization": "Bearer real"})
     _, kwargs = mock_request.call_args
-    # The case's token wins — no fallback "Bearer invalid-token-000".
-    assert kwargs["headers"]["Authorization"] == "Bearer expired"
+    assert kwargs["headers"]["Authorization"] == "Bearer real"
 
 
 @patch("core.test_executor.safe_request")
@@ -223,11 +228,24 @@ def test_positive_case_keeps_form_auth(mock_request):
 
 @patch("core.test_executor.safe_request")
 def test_empty_case_header_value_omits_header(mock_request):
+    """Empty-string means "omit this header" — for plain headers."""
+    mock_request.return_value = _mock_response(status=200)
+    case = _case_with_request("negative", headers={"X-Extra": ""})
+    execute_test_case(case, ENDPOINT, "POST", headers={"X-Extra": "drop-me"})
+    _, kwargs = mock_request.call_args
+    assert "X-Extra" not in kwargs["headers"]
+
+
+@patch("core.test_executor.safe_request")
+def test_empty_case_credential_header_is_ignored(mock_request):
+    """An empty-string CREDENTIAL header is the AI simulating "missing auth".
+    It is still a credential header, so it is ignored and the user's real
+    login is kept — Apitrek never strips the real login to honour an AI guess."""
     mock_request.return_value = _mock_response(status=401)
     case = _case_with_request("negative", headers={"Authorization": ""})
     execute_test_case(case, ENDPOINT, "POST", headers={"Authorization": "Bearer real"})
     _, kwargs = mock_request.call_args
-    assert "Authorization" not in kwargs["headers"]
+    assert kwargs["headers"]["Authorization"] == "Bearer real"
 
 
 @patch("core.test_executor.safe_request")
@@ -256,8 +274,9 @@ def test_case_with_request_gets_no_blind_mutation(mock_request):
         body={"name": "x"}, expected={"status_code": 400})
     execute_test_case(case, ENDPOINT, "POST", body={"form": 1})
     _, kwargs = mock_request.call_args
-    # "Basic instead of Bearer" sends Basic — the body is untouched too.
-    assert kwargs["headers"]["Authorization"] == "Basic dXNlcjpwYXNz"
+    # The case's own request is sent untouched, but a credential header the
+    # form doesn't supply is the AI's fabrication — dropped, never sent.
+    assert "Authorization" not in kwargs["headers"]
     assert kwargs["json"] == {"name": "x"}
 
 
@@ -577,19 +596,37 @@ def test_positive_case_can_still_omit_a_header(mock_request):
 
 
 @patch("core.test_executor.safe_request")
-def test_negative_case_headers_stay_authoritative(mock_request):
-    """Regression guard: negative cases still send the case's own (fake)
-    credential so the 'missing/invalid token' scenario is what gets tested."""
-    mock_request.return_value = _mock_response(status=403)
+def test_negative_case_fake_cookie_dropped_real_kept(mock_request):
+    """HIGH-2 regression: a negative/edge case must not swap the user's real
+    login for the AI's fake one (token=valid123 → 403). The real credential
+    is kept on every test; non-credential case headers still apply."""
+    mock_request.return_value = _mock_response(status=400)
     case = {
-        "id": "TC-NEG-01", "title": "bad token", "category": "negative",
-        "request": {"endpoint": ENDPOINT, "method": "GET",
-                    "headers": {"Cookie": "token=FAKE"}},
-        "expected": {"status_code": 403},
+        "id": "TC-NEG-01", "title": "null field", "category": "negative",
+        "request": {"endpoint": ENDPOINT, "method": "POST",
+                    "headers": {"Cookie": "token=valid123",
+                                "Content-Type": "application/json"},
+                    "body": {"name": None}},
+        "expected": {"status_code": 400},
     }
-    execute_test_case(case, ENDPOINT, "GET", headers={"Cookie": "token=REAL"})
+    execute_test_case(case, ENDPOINT, "POST",
+                      headers={"Cookie": "session=REAL"}, body={"name": "x"})
     _, kwargs = mock_request.call_args
-    assert kwargs["headers"]["Cookie"] == "token=FAKE"
+    assert kwargs["headers"]["Cookie"] == "session=REAL"
+    assert kwargs["headers"]["Content-Type"] == "application/json"
+    assert kwargs["json"] == {"name": None}
+
+
+@patch("core.test_executor.safe_request")
+def test_negative_case_non_credential_header_applies(mock_request):
+    """A wrong Content-Type from the case is a real negative test — applied."""
+    mock_request.return_value = _mock_response(status=400)
+    case = _case_with_request("negative", headers={"Content-Type": "text/plain"})
+    execute_test_case(case, ENDPOINT, "POST",
+                      headers={"Cookie": "session=REAL"}, body={"a": 1})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["Content-Type"] == "text/plain"
+    assert kwargs["headers"]["Cookie"] == "session=REAL"
 
 
 # --- rule checks: headers are headers, not body fields ------------------------
@@ -644,5 +681,3 @@ def test_header_rule_passes_when_header_present(mock_request):
     assert "header 'Content-Encoding' present" in header_entry["detail"]
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
