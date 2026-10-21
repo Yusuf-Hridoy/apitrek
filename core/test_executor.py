@@ -19,8 +19,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from core.assertion_rules import (
+    resolve_field_path,
+    rule_field_and_value,
+    rule_implies_absence,
+)
 from core.auth_check import _normalize_expected_status
-from core.database import _SENSITIVE_HEADER_HINTS
+from core.database import _SENSITIVE_HEADER_HINTS, _is_sensitive_body_key
 from core.url_guard import safe_request, BlockedURLError
 
 REQUEST_TIMEOUT_SECONDS = 15
@@ -61,29 +66,23 @@ def _type_matches(value: Any, word: str) -> bool:
     return isinstance(value, py_type)
 
 
-def _first_json_object(data: Any) -> Optional[Dict[str, Any]]:
-    """Return a dict to inspect: the response itself, or the first item of a list."""
-    if isinstance(data, dict):
-        return data
-    if isinstance(data, list) and data and isinstance(data[0], dict):
-        return data[0]
-    return None
-
-
 def _run_assertion_rule(
     rule: str, response_data: Any, status_code: int, response_headers: Any = None
 ) -> Tuple[bool, str, bool]:
     """
     Evaluate one free-text validation rule as best as mechanically possible.
 
-    Understands status-code rules ("status code is 200"), quoted field
-    checks ("field 'price' is present", "'id' must be an integer"), and
-    header checks ("header 'Content-Encoding' is 'gzip'") — header rules are
-    verified against the response headers, never the body, and header VALUES
-    are never printed. Rules that cannot be checked mechanically are flagged
-    verifiable=False so the UI can distinguish them from real passes — they
-    never count as passed checks.
+    Shares its rule interpretation with the export translator
+    (``core.assertion_rules``): the first quoted token is the field or
+    header, a second quoted token after an equals-style phrase is the
+    expected VALUE (never a field name), and negation means the field or
+    header must be ABSENT. Dotted paths ("data.id") resolve through nested
+    objects. Header rules are verified against the response headers, never
+    the body, and header VALUES are never printed. Rules that cannot be
+    checked mechanically are flagged verifiable=False so the UI can
+    distinguish them from real passes — they never count as passed checks.
     """
+    rule = str(rule)
     lowered = rule.lower()
 
     # Status-code rules: "status code is 200", "returns 404 on missing resource"
@@ -93,52 +92,67 @@ def _run_assertion_rule(
             code = int(match.group(1))
             return status_code == code, f"Expected HTTP {code}, got {status_code}", True
 
-    # Quoted field names: "id", 'price'
-    fields = re.findall(r"['\"]([A-Za-z_][\w.\-]*)['\"]", rule)
+    target, expected_value = rule_field_and_value(rule)
+    if target is None:
+        return False, "Rule not mechanically verifiable — manual review recommended", False
+    wants_absent = rule_implies_absence(rule)
 
-    # Header-targeted rules: check the response headers, not the body. The
-    # first quoted token is the header name; a second quoted token after
-    # "equals" is the expected value. Values are secrets-adjacent — compared
-    # quietly, never printed.
-    if fields and "header" in lowered:
+    def _value_repr(value: Any) -> str:
+        # Compare quietly; truncate long values. A rule about a
+        # credential-shaped field prints its type, not its content.
+        if _is_sensitive_body_key(str(target).split(".")[-1]):
+            return f"<{type(value).__name__}>"
+        text = repr(value)
+        return text if len(text) <= 80 else text[:77] + "..."
+
+    # Header-targeted rules: check the response headers, not the body.
+    if "header" in lowered:
         try:
             header_map = {str(k).lower(): v for k, v in (response_headers or {}).items()}
         except Exception:
             header_map = None
         if header_map is not None:
-            name = fields[0]
-            if name.lower() not in header_map:
-                return False, f"header '{name}' MISSING", True
-            detail = f"header '{name}' present"
-            if "equals" in lowered and len(fields) > 1:
-                if str(header_map[name.lower()]) == fields[1]:
+            present = target.lower() in header_map
+            if wants_absent:
+                if present:
+                    return False, f"header '{target}' present, expected absent", True
+                return True, f"header '{target}' absent", True
+            if not present:
+                return False, f"header '{target}' MISSING", True
+            detail = f"header '{target}' present"
+            if expected_value is not None:
+                if str(header_map[target.lower()]) == expected_value:
                     detail += ", value matches"
                 else:
-                    return False, detail + ", value differs", True
+                    return False, (
+                        detail + f", value differs (expected {expected_value!r}, "
+                        f"got {_value_repr(header_map[target.lower()])})"
+                    ), True
             return True, detail, True
 
-    target = _first_json_object(response_data)
-    if fields and target is not None:
-        details = []
-        all_ok = True
-        for field in fields:
-            if field not in target:
-                all_ok = False
-                details.append(f"field '{field}' MISSING")
-                continue
-            detail = f"field '{field}' present"
-            for word in _TYPE_WORDS:
-                if word in lowered:
-                    if _type_matches(target[field], word):
-                        detail += f", type {word} OK"
-                    else:
-                        all_ok = False
-                        detail += f", expected type {word} (got {type(target[field]).__name__})"
-                    break
-            details.append(detail)
-        return all_ok, "; ".join(details), True
-
-    return False, "Rule not mechanically verifiable — manual review recommended", False
+    # Field rules: dotted paths resolve through nested objects/lists.
+    found, value = resolve_field_path(response_data, target)
+    if wants_absent:
+        if found:
+            return False, f"field '{target}' present, expected absent", True
+        return True, f"field '{target}' absent", True
+    if not found:
+        return False, f"field '{target}' MISSING", True
+    if expected_value is not None:
+        if str(value) == expected_value:
+            return True, f"field '{target}' value matches", True
+        return False, (
+            f"field '{target}' value differs (expected {expected_value!r}, "
+            f"got {_value_repr(value)})"
+        ), True
+    detail = f"field '{target}' present"
+    for word in _TYPE_WORDS:
+        if word in lowered:
+            if _type_matches(value, word):
+                detail += f", type {word} OK"
+                return True, detail, True
+            return False, detail + f", expected type {word} (got {type(value).__name__})", True
+    return True, detail, True
 
 
 def _is_sensitive_header(name: Any) -> bool:

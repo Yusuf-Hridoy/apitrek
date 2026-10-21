@@ -148,6 +148,7 @@ def test_generate_route_includes_sample_response():
     """The generate endpoint must forward sample_response in its result."""
     from web.routes.generate import GenerateRequest, generate_tests
     from fastapi import Request
+    from fastapi.responses import Response
     from unittest.mock import MagicMock
 
     sample = {"id": 1, "title": "x"}
@@ -157,5 +158,6 @@ def test_generate_route_includes_sample_response():
         sample_response=sample,
     )
     request = MagicMock(spec=Request)
-    result = generate_tests(request, payload)
+    response = MagicMock(spec=Response)
+    result = generate_tests(request, response, payload)
     assert result.get("sample_response") == sample

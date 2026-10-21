@@ -18,6 +18,8 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.assertion_rules import quoted_tokens
+
 # path segments; each element is (key, is_list) so we can build correct accessors
 FieldPath = Tuple[Tuple[str, bool], ...]
 
@@ -88,8 +90,21 @@ def _jstype(v: Any) -> Optional[str]:
 
 
 def _match_rule(rule: str, fields: Dict[FieldPath, Any]) -> Optional[FieldPath]:
-    """Return a real field path the rule refers to (longest leaf match wins)."""
+    """Return a real field path the rule refers to (longest leaf match wins).
+
+    Shares the rule interpretation with the live runner
+    (``core.assertion_rules``): a quoted dotted path ("args.name") is
+    resolved exactly first — its first quoted token is the field, never the
+    expected value. Falls back to a leaf word search for rules without
+    quoted tokens.
+    """
     low = rule.lower()
+    tokens = quoted_tokens(rule)
+    if tokens:
+        wanted = tokens[0].lower()
+        for path in fields:
+            if ".".join(k for k, _ in path).lower() == wanted:
+                return path
     for path in sorted(fields, key=lambda p: len(p[-1][0]), reverse=True):
         leaf = path[-1][0].lower()
         if re.search(rf"\b{re.escape(leaf)}\b", low):

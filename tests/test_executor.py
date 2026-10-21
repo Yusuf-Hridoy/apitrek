@@ -10,7 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import pytest
 import requests
-from core.test_executor import execute_test_case, execute_test_suite
+from core.test_executor import _run_assertion_rule, execute_test_case, execute_test_suite
 
 ENDPOINT = "https://api.example.com/items/1"
 
@@ -681,3 +681,77 @@ def test_header_rule_passes_when_header_present(mock_request):
     assert "header 'Content-Encoding' present" in header_entry["detail"]
 
 
+# --- rule checks: equals VALUES, absence, dotted paths -------------------------
+
+def test_equals_rule_compares_value_not_field_name():
+    """`args.name equals 'alice'` compares the VALUE — 'alice' is not a field."""
+    ok, detail, verifiable = _run_assertion_rule(
+        "args.name equals 'alice'", {"args": {"name": "alice"}}, 200)
+    assert ok is True and verifiable is True
+
+    ok, detail, verifiable = _run_assertion_rule(
+        "args.name equals 'alice'", {"args": {"name": "bob"}}, 200)
+    assert ok is False and verifiable is True
+    assert "value differs" in detail
+    # The literal must never be reported as a missing FIELD.
+    assert "field 'alice' MISSING" not in detail
+
+
+def test_absence_header_rule_passes_when_absent_fails_when_present():
+    ok, detail, verifiable = _run_assertion_rule(
+        "No 'ETag' header in the response", {"id": 1}, 200, response_headers={})
+    assert ok is True and verifiable is True
+    assert "absent" in detail
+
+    ok, detail, verifiable = _run_assertion_rule(
+        "No 'ETag' header in the response", {"id": 1}, 200,
+        response_headers={"ETag": '"abc"'})
+    assert ok is False and verifiable is True
+    assert "expected absent" in detail
+
+
+def test_absence_field_rule():
+    ok, detail, _ = _run_assertion_rule(
+        "field 'debug' must not be present", {"id": 1}, 200)
+    assert ok is True
+    ok, detail, _ = _run_assertion_rule(
+        "field 'debug' must not be present", {"id": 1, "debug": True}, 200)
+    assert ok is False
+
+
+def test_dotted_path_type_check():
+    ok, detail, verifiable = _run_assertion_rule(
+        "data.id is an integer", {"data": {"id": 42}}, 200)
+    assert ok is True and verifiable is True
+    assert "type integer OK" in detail
+
+    ok, detail, _ = _run_assertion_rule(
+        "data.id is an integer", {"data": {"id": "forty-two"}}, 200)
+    assert ok is False
+    assert "expected type integer" in detail
+
+
+def test_list_root_dotted_path():
+    ok, detail, _ = _run_assertion_rule(
+        "items.sku is a string", {"items": [{"sku": "ABC-1"}]}, 200)
+    assert ok is True
+
+
+def test_ambiguous_rule_stays_unverifiable():
+    ok, detail, verifiable = _run_assertion_rule(
+        "the response should look reasonable", {"id": 1}, 200)
+    assert ok is False and verifiable is False
+    assert "not mechanically verifiable" in detail
+
+
+def test_equality_does_not_print_secret_shaped_values():
+    """A rule about a credential-shaped field reports the type, not the value."""
+    ok, detail, _ = _run_assertion_rule(
+        "data.token equals 'abc'", {"data": {"token": "super-secret"}}, 200)
+    assert ok is False
+    assert "super-secret" not in detail
+    assert "<str>" in detail
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
