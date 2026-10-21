@@ -751,7 +751,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const failedChecks = checks.filter((a) => a.passed === false && a.verifiable !== false);
         let headLine;
         if (failedChecks.length && !(statusCheck && statusCheck.passed === false)) {
-            headLine = "a response check didn't pass (see below)";
+            // Name the first failing check instead of a generic "see below" —
+            // the rule text plus its concrete detail (e.g. "value differs").
+            const first = failedChecks[0];
+            headLine = `${escapeHtml(String(first.assertion))} — ` +
+                `${escapeHtml(String(first.detail))}`;
         } else {
             headLine = `expected ${result.expected_status ?? '—'} &rarr; got ${result.actual_status ?? '—'}`;
         }
@@ -832,8 +836,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         entry.detailsEl.innerHTML = buildDetailsHtml(result, entry.data);
         entry.detailsEl.classList.remove('hidden');
-        // Reveal the card body so the outcome is visible; auto-expand on failure.
-        if (outcomeOf(result) === 'failed') {
+        // Reveal the card body so the outcome is visible; auto-expand on
+        // failure AND on not-run/skipped — a card that never reached the API
+        // must show its reason up front, never a bare badge.
+        const outcome = outcomeOf(result);
+        if (outcome === 'failed' || outcome === 'not_run' || outcome === 'skipped') {
             entry.body.classList.remove('hidden');
             entry.el.classList.add('open');
         }
@@ -916,6 +923,9 @@ document.addEventListener('DOMContentLoaded', () => {
             applyExecutionResult(entry, result);
             refreshFunctionalScorecard();
             validateContract(result);
+            if (result.history_saved === false) {
+                showToast("The result couldn't be saved to History — it will be missing after reload.", 'error');
+            }
         } catch (err) {
             applyExecutionResult(entry, notRunResult(err));
             refreshFunctionalScorecard();
@@ -978,6 +988,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const total = caseCards.length;
         let lastExecution = null;
+        let unsavedResults = 0;
 
         for (let i = 0; i < total; i++) {
             const entry = caseCards[i];
@@ -986,6 +997,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const result = entry.data.skip ? skippedResult(entry) : await executeOne(entry);
                 applyExecutionResult(entry, result);
+                if (result.history_saved === false) unsavedResults += 1;
                 lastExecution = result;
             } catch (err) {
                 // Apitrek's own call failed (firewall, rate limit, network) —
@@ -1001,6 +1013,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const tally = tallyRunOutcomes();
         renderExecutionSummaryBar(tally);
         setExecutionUiDisabled(false);
+        if (unsavedResults) {
+            showToast(`${unsavedResults} result(s) couldn't be saved to History — they will be missing after reload.`, 'error');
+        }
         // Red icon only when nothing passed; a mostly-green run stays neutral.
         const decided = tally.passed + tally.failed;
         const toastType = tally.failed === 0 ? 'success' : (tally.passed > 0 ? 'info' : 'error');
@@ -1945,6 +1960,12 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('headers').value = headersJson;
             document.getElementById('requestBody').value = bodyJson;
             document.getElementById('sampleResponse').value = sampleJson;
+            // The loaded session replaces the whole form — a pasted cURL from
+            // the previous form no longer describes anything; don't leave it.
+            if (curlInput) {
+                curlInput.value = '';
+                curlFeedback.classList.add('hidden');
+            }
             // Credentials (in the URL, headers, body, or sample response) are redacted
             // before storage — warn the user they must be re-entered before running
             // authenticated requests against this session.
@@ -1957,12 +1978,24 @@ document.addEventListener('DOMContentLoaded', () => {
             goToTesting(isSecurity ? 'security' : 'functional');
 
             // Restore the generated test cases (and any run results) so the user
-            // sees them instantly instead of having to regenerate. Security scan
-            // results aren't reconstructable from stored rows — form-only for now.
+            // sees them instantly instead of having to regenerate. Functional
+            // sessions rebuild the case list, scorecard, summary bar, and the
+            // stability strip; security sessions rebuild the scan view.
             const cases = s.test_cases || [];
-            if (!isSecurity && cases.length) {
+            if (isSecurity) {
+                if (s.scan && Array.isArray(s.scan.findings)) {
+                    lastScan = s.scan;
+                    renderScanResults(s.scan);
+                    showToast('Session restored — scan findings loaded.', 'success');
+                } else {
+                    // Scans saved before findings were persisted restore the
+                    // form only — the scan has to be re-run to see results.
+                    showToast('Session loaded into the form.', 'success');
+                }
+            } else if (cases.length) {
                 const restored = reshapeStoredCases(cases);
                 restored.auth_check = s.auth_check || null;
+                restored.stability = s.stability || null;
                 lastResult = restored;
                 lastSessionId = id;
                 renderResults(restored);
@@ -2157,7 +2190,8 @@ document.addEventListener('DOMContentLoaded', () => {
         renderDegradedBanner(data);
         refreshFunctionalScorecard();
         // Stability strip goes directly under the scorecard. The summary is
-        // not persisted (History restores show per-assertion tags only).
+        // persisted with the session (sessions.stability_json), so a history
+        // reload rebuilds the strip exactly as it looked live.
         const scorecardEl = document.getElementById('scorecard');
         const stabSlot = scorecardSlot(resultsSection, 'stabilityStrip', scorecardEl || undefined);
         renderStabilityStrip(stabSlot, data.stability, assertions);

@@ -1,6 +1,7 @@
 """
 FastAPI route for executing generated test cases against the live API.
 """
+import logging
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,9 +15,30 @@ from pydantic import BaseModel, Field
 from core.test_executor import execute_test_case, execute_test_suite
 from core.url_guard import validate_public_url, BlockedURLError
 from web.limiter import limiter, LIMIT_EXECUTE_SUITE, LIMIT_EXECUTE_SINGLE
-from core.database import save_execution_results
+from core.database import save_execution_results, get_session
 
 router = APIRouter(tags=["execute"])
+logger = logging.getLogger(__name__)
+
+
+def _attach_results(session_id: Optional[int], results: List[Dict[str, Any]]) -> bool:
+    """Persist execution results, reporting failure instead of dropping it.
+
+    History persistence must never break a run, but a failed save must be
+    visible (returned as False and logged) rather than silently losing the
+    run from History.
+    """
+    if session_id is None:
+        return True
+    try:
+        if get_session(session_id) is None:
+            logger.warning("Execution results not saved: session %s does not exist.", session_id)
+            return False
+        save_execution_results(session_id, results)
+        return True
+    except Exception as e:
+        logger.warning("Failed to save execution results for session %s: %s", session_id, e)
+        return False
 
 
 class ExecuteRequest(BaseModel):
@@ -103,13 +125,12 @@ def execute_tests(request: Request, payload: ExecuteRequest) -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Test execution failed: {e}")
 
-    if payload.session_id is not None:
-        try:
-            save_execution_results(payload.session_id, suite["results"])
-        except Exception:
-            pass  # history persistence is best-effort
-
-    return {"results": suite["results"], "summary": _build_summary(suite["results"])}
+    history_saved = _attach_results(payload.session_id, suite["results"])
+    return {
+        "results": suite["results"],
+        "summary": _build_summary(suite["results"]),
+        "history_saved": history_saved,
+    }
 
 
 @router.post("/execute-single")
@@ -136,10 +157,5 @@ def execute_single(request: Request, payload: ExecuteSingleRequest) -> Dict[str,
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Test execution failed: {e}")
 
-    if payload.session_id is not None:
-        try:
-            save_execution_results(payload.session_id, [result])
-        except Exception:
-            pass  # history persistence is best-effort
-
+    result["history_saved"] = _attach_results(payload.session_id, [result])
     return result

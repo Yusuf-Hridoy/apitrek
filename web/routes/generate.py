@@ -73,6 +73,10 @@ def _cases_for_db(result: Dict[str, Any]) -> list:
             },
             "severity": assertion.get("severity"),
             "grounded": assertion.get("grounded", False),
+            # The runner keys execution results by case id; assertions get a
+            # stable generated id (AST-01...) above so every assertion result
+            # restores onto the right card instead of colliding on an empty id.
+            "case_ref": assertion.get("id"),
         })
     return rows
 
@@ -195,6 +199,13 @@ def generate_tests(request: Request, response: Response, payload: GenerateReques
     if "_error" in result:
         raise HTTPException(status_code=502, detail=result["_error"])
 
+    # Assertions carry no LLM id of their own; give each a stable one so the
+    # runner keys its execution result by something unique (an empty id would
+    # collide across every assertion in the session and silently drop results
+    # on history reload). _cases_for_db persists the same id as case_ref.
+    for i, assertion in enumerate(result.get("assertions") or [], start=1):
+        assertion.setdefault("id", f"AST-{i:02d}")
+
     # expose the fetched response so exporters can build schema-driven assertions
     if sample_response is not None:
         result["sample_response"] = sample_response
@@ -221,7 +232,9 @@ def generate_tests(request: Request, response: Response, payload: GenerateReques
 
     # Persist the session for history (best-effort; never breaks generation).
     # The mode is passed explicitly so functional runs never land in the
-    # security history bucket. History is scoped to this browser's anonymous id.
+    # security history bucket. History is scoped to this browser's anonymous
+    # id, and the stability summary rides along so a reload can rebuild the
+    # strip, not just the per-assertion tags.
     try:
         client_id = ensure_browser_id(request, response)
         session_id = save_session(
@@ -233,6 +246,7 @@ def generate_tests(request: Request, response: Response, payload: GenerateReques
             mode="functional",
             auth_check=auth_check,
             client_id=client_id,
+            stability=stability,
         )
         try:
             save_test_cases(session_id, _cases_for_db(result))

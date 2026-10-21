@@ -83,6 +83,8 @@ def init_db() -> None:
         _migrate_add_column(conn, "sessions", "auth_check_json", "TEXT")
         _migrate_add_column(conn, "execution_results", "assertion_results_json", "TEXT")
         _migrate_add_column(conn, "sessions", "client_id", "TEXT")
+        _migrate_add_column(conn, "sessions", "stability_json", "TEXT")
+        _migrate_add_column(conn, "sessions", "scan_json", "TEXT")
 
 
 def _migrate_add_column(
@@ -288,6 +290,8 @@ def save_session(
     mode: str = "functional",
     auth_check: Optional[Dict[str, Any]] = None,
     client_id: Optional[str] = None,
+    stability: Optional[Dict[str, Any]] = None,
+    scan: Optional[Dict[str, Any]] = None,
 ) -> int:
     """
     Insert a session row and return its id.
@@ -304,14 +308,20 @@ def save_session(
     scopes history to the browser that created it — it is a random UUID, never
     an email or account. Rows saved without one (pre-scope data) belong to
     nobody and never appear in anyone's history list.
+
+    ``stability`` and ``scan`` are the generation stability summary and the
+    security scan response; both are already masked before they reach here and
+    let a history reload rebuild the strip / findings view exactly as they
+    looked live.
     """
     with _connect() as conn:
         cursor = conn.execute(
             """
             INSERT INTO sessions (endpoint, method, headers_json, body_json,
                                   sample_response_json, created_at, mode,
-                                  auth_check_json, client_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  auth_check_json, client_id, stability_json,
+                                  scan_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 redact_url(endpoint),
@@ -323,6 +333,8 @@ def save_session(
                 mode,
                 json.dumps(auth_check) if auth_check is not None else None,
                 client_id,
+                json.dumps(stability) if stability is not None else None,
+                json.dumps(scan) if scan is not None else None,
             ),
         )
         return int(cursor.lastrowid)
@@ -401,7 +413,9 @@ def save_execution_results(session_id: int, results: List[Dict[str, Any]]) -> in
             1 if r.get("passed") else 0,
             r.get("actual_status"),
             redact_response_text(r.get("actual_response_preview") or r.get("actual_response")),
-            r.get("error_message"),
+            # Client error strings can echo the request URL — mask any
+            # query-string secrets before they reach disk.
+            redact_url(r.get("error_message")),
             r.get("duration_ms"),
             now,
             r.get("outcome"),
@@ -496,6 +510,18 @@ def get_session(
             session["auth_check"] = None
     else:
         session["auth_check"] = None
+
+    # Stability summary / security scan response: persisted so a history
+    # reload rebuilds the strip and the findings view, not just the form.
+    for key in ("stability_json", "scan_json"):
+        target = key.replace("_json", "")
+        if session.get(key):
+            try:
+                session[target] = json.loads(session[key])
+            except (ValueError, TypeError):
+                session[target] = None
+        else:
+            session[target] = None
 
     def _decode_case(row: sqlite3.Row) -> Dict[str, Any]:
         case = dict(row)

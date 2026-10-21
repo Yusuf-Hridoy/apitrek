@@ -6,6 +6,7 @@ Every route is scoped to the caller's browser via the anonymous apitrek_sid
 cookie (see web/client_id.py): one visitor can never list, open, rerun, or
 delete another visitor's sessions.
 """
+import logging
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -27,6 +28,7 @@ from web.client_id import browser_id, ensure_browser_id
 from web.routes.execute import _build_summary
 
 router = APIRouter(tags=["history"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/history/sessions")
@@ -106,12 +108,19 @@ def rerun_session(session_id: int, request: Request) -> Dict[str, Any]:
         headers=session.get("headers"),
         body=session.get("body"),
     )
+    history_saved = True
     try:
         save_execution_results(session_id, results["results"])
-    except Exception:
-        pass  # history persistence is best-effort
+    except Exception as e:
+        # A lost save is visible in the response (and the logs), not silent.
+        logger.warning("Failed to save rerun results for session %s: %s", session_id, e)
+        history_saved = False
 
-    return {"results": results["results"], "summary": _build_summary(results["results"])}
+    return {
+        "results": results["results"],
+        "summary": _build_summary(results["results"]),
+        "history_saved": history_saved,
+    }
 
 
 @router.delete("/history/sessions/{session_id}", status_code=204)
