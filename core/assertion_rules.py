@@ -76,6 +76,33 @@ def rule_implies_equality(rule: str) -> bool:
     return any(phrase in low for phrase in _EQUALITY_PHRASES)
 
 
+# Value-comparison phrases. A rule with one of these (and no presence verb)
+# checks the field's VALUE — it cannot be judged when the field is absent.
+_VALUE_PHRASES = ("equals", "must be", "should be", "==")
+
+# Presence verbs: a mere existence rule stays a hard check even when one of
+# the value phrases appears ("'id' must be present" is about presence).
+_PRESENCE_WORDS = ("present", "exist", "has field")
+
+
+def rule_checks_value(rule: str, expected_value: Optional[str] = None) -> bool:
+    """True when the rule checks the field's VALUE rather than its presence.
+
+    A value comparison ("args.name equals 'alice'", "id == 1") has nothing to
+    compare when the field is absent, so the caller should treat a missing
+    field as needs-review, not a failure — the rule may assume a field the
+    request never sent. A presence rule ("is present", "must exist") stays a
+    hard check on a missing field. An explicit ``expected_value`` (from
+    rule_field_and_value) marks the rule as a value comparison on its own.
+    """
+    if expected_value is not None:
+        return True
+    low = f" {str(rule).lower()} "
+    if any(word in low for word in _PRESENCE_WORDS):
+        return False
+    return any(phrase in low for phrase in _VALUE_PHRASES)
+
+
 def rule_implies_absence(rule: str) -> bool:
     """True when the rule wants the field/header to be ABSENT."""
     return bool(_ABSENCE_RE.search(str(rule)))

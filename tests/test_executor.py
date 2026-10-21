@@ -753,5 +753,56 @@ def test_equality_does_not_print_secret_shaped_values():
     assert "<str>" in detail
 
 
+# --- value checks on absent fields are Needs Review, not failures --------------
+
+def test_value_check_on_absent_field_is_needs_review_not_failure():
+    """`args.name equals 'alice'` against {"args": {}}: the field was never
+    sent, so there is no value to compare. Not a fail — Needs Review."""
+    ok, detail, verifiable = _run_assertion_rule(
+        "args.name equals 'alice'", {"args": {}}, 200)
+    assert ok is False
+    assert verifiable is False
+    assert "isn't in the response" in detail
+    assert "MISSING" not in detail
+
+    # A bare must-be/== comparison with no quoted value behaves the same.
+    ok, _, verifiable = _run_assertion_rule(
+        "retry_count == 3", {"args": {}}, 200)
+    assert ok is False and verifiable is False
+
+
+def test_presence_rule_on_absent_field_still_fails():
+    """'is present' is a hard existence check — a missing field fails it."""
+    ok, detail, verifiable = _run_assertion_rule("'id' is present", {}, 200)
+    assert ok is False
+    assert verifiable is True
+    assert "field 'id' MISSING" in detail
+
+    ok, detail, verifiable = _run_assertion_rule("'id' must be present", {}, 200)
+    assert ok is False
+    assert verifiable is True
+    assert "field 'id' MISSING" in detail
+
+
+@patch("core.test_executor.safe_request")
+def test_assertion_case_with_absent_value_field_is_needs_review(mock_request):
+    """End to end: an assertion whose value rule targets a field the response
+    never contained must not fail the card. The status check still passes,
+    and the value rule renders amber Needs Review (verifiable=False)."""
+    mock_request.return_value = _mock_response(status=200, payload={"args": {}})
+    case = {
+        "id": "AST-01", "title": "name echoes back", "category": "assertion",
+        "rule": "args.name equals 'alice'",
+        "request": {"endpoint": ENDPOINT, "method": "GET"},
+        "expected": {"status_code": 200},
+    }
+    result = execute_test_case(case, ENDPOINT, "GET")
+    assert result["outcome"] == "passed"
+    entry = result["assertion_results"][-1]
+    assert entry["verifiable"] is False
+    assert entry["passed"] is False
+    assert "isn't in the response" in entry["detail"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -21,6 +21,7 @@ import requests
 
 from core.assertion_rules import (
     resolve_field_path,
+    rule_checks_value,
     rule_field_and_value,
     rule_implies_absence,
 )
@@ -77,10 +78,13 @@ def _run_assertion_rule(
     header, a second quoted token after an equals-style phrase is the
     expected VALUE (never a field name), and negation means the field or
     header must be ABSENT. Dotted paths ("data.id") resolve through nested
-    objects. Header rules are verified against the response headers, never
-    the body, and header VALUES are never printed. Rules that cannot be
-    checked mechanically are flagged verifiable=False so the UI can
-    distinguish them from real passes — they never count as passed checks.
+    objects. A VALUE comparison ("equals 'alice'") on a field the response
+    doesn't contain is verifiable=False — Needs Review, not a failure —
+    while a presence rule on a missing field stays a fail. Header rules are
+    verified against the response headers, never the body, and header VALUES
+    are never printed. Rules that cannot be checked mechanically are flagged
+    verifiable=False so the UI can distinguish them from real passes — they
+    never count as passed checks.
     """
     rule = str(rule)
     lowered = rule.lower()
@@ -137,6 +141,14 @@ def _run_assertion_rule(
             return False, f"field '{target}' present, expected absent", True
         return True, f"field '{target}' absent", True
     if not found:
+        if rule_checks_value(rule, expected_value):
+            # A value comparison on a field that isn't there has nothing to
+            # compare — not a failure, just unverifiable (Needs Review): the
+            # rule may assume a field the request never sent.
+            return False, (
+                f"field '{target}' isn't in the response, so its value can't be "
+                "checked — the test may assume a field that wasn't sent"
+            ), False
         return False, f"field '{target}' MISSING", True
     if expected_value is not None:
         if str(value) == expected_value:
