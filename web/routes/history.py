@@ -1,6 +1,10 @@
 """
 FastAPI routes for session history (SQLite persistence).
 History is an enhancement — DB failures degrade to clean errors, never crashes.
+
+Every route is scoped to the caller's browser via the anonymous apitrek_sid
+cookie (see web/client_id.py): one visitor can never list, open, rerun, or
+delete another visitor's sessions.
 """
 import sys
 from pathlib import Path
@@ -9,7 +13,7 @@ from typing import Any, Dict
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from core.database import (
@@ -19,24 +23,42 @@ from core.database import (
     save_execution_results,
 )
 from core.test_executor import execute_test_suite
+from web.client_id import browser_id, ensure_browser_id
 from web.routes.execute import _build_summary
 
 router = APIRouter(tags=["history"])
 
 
 @router.get("/history/sessions")
-async def list_sessions(limit: int = 20) -> Dict[str, Any]:
-    """List recent sessions (newest first)."""
-    return {"sessions": get_recent_sessions(limit=limit)}
+async def list_sessions(
+    request: Request, response: Response, limit: int = 20
+) -> Dict[str, Any]:
+    """List recent sessions (newest first) for THIS browser only."""
+    client_id = ensure_browser_id(request, response)
+    return {"sessions": get_recent_sessions(limit=limit, client_id=client_id)}
 
 
 @router.get("/history/sessions/{session_id}")
-async def read_session(session_id: int) -> Dict[str, Any]:
+async def read_session(session_id: int, request: Request) -> Dict[str, Any]:
     """Return one session with its test cases and execution results."""
-    session = get_session(session_id)
+    session = _owned_session(session_id, request)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     return session
+
+
+def _owned_session(session_id: int, request: Request):
+    """The session only when it belongs to this browser; None otherwise.
+
+    A request without the apitrek_sid cookie owns nothing — the list route
+    issues the cookie, so after first contact every browser carries one and
+    guessing an id (or omitting the cookie) is never enough to read, rerun,
+    or delete someone else's session.
+    """
+    client_id = browser_id(request)
+    if client_id is None:
+        return None
+    return get_session(session_id, client_id=client_id)
 
 
 def _rebuild_executor_cases(session: Dict[str, Any]) -> list:
@@ -67,9 +89,9 @@ def _rebuild_executor_cases(session: Dict[str, Any]) -> list:
 
 
 @router.post("/history/sessions/{session_id}/rerun")
-def rerun_session(session_id: int) -> Dict[str, Any]:
+def rerun_session(session_id: int, request: Request) -> Dict[str, Any]:
     """Re-execute a stored session's test cases against the live API."""
-    session = get_session(session_id)
+    session = _owned_session(session_id, request)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
 
@@ -93,8 +115,9 @@ def rerun_session(session_id: int) -> Dict[str, Any]:
 
 
 @router.delete("/history/sessions/{session_id}", status_code=204)
-async def remove_session(session_id: int) -> Response:
-    """Delete a session and its data."""
-    if not delete_session(session_id):
+async def remove_session(session_id: int, request: Request) -> Response:
+    """Delete a session and its data (own sessions only)."""
+    if _owned_session(session_id, request) is None:
         raise HTTPException(status_code=404, detail="Session not found.")
+    delete_session(session_id)
     return Response(status_code=204)

@@ -28,6 +28,7 @@ from exports.security_report_generator import (
     generate_html_report,
     generate_markdown_report,
 )
+from web.client_id import ensure_browser_id
 from web.limiter import limiter, LIMIT_SECURITY_SCAN
 from core.database import save_session, save_test_cases
 
@@ -118,7 +119,7 @@ def security_plan(payload: ScanRequest) -> Dict[str, Any]:
 
 @router.post("/security/scan")
 @limiter.limit(LIMIT_SECURITY_SCAN)
-def security_scan(request: Request, payload: ScanRequest) -> Dict[str, Any]:
+def security_scan(request: Request, http_response: Response, payload: ScanRequest) -> Dict[str, Any]:
     """Generate and execute OWASP security tests against the endpoint."""
     if not payload.endpoint or not payload.endpoint.strip():
         raise HTTPException(status_code=422, detail="Endpoint is required.")
@@ -198,7 +199,9 @@ def security_scan(request: Request, payload: ScanRequest) -> Dict[str, Any]:
     }
 
     # Persist the scan for history (best-effort; never breaks the scan).
+    # History is scoped to this browser's anonymous id.
     try:
+        client_id = ensure_browser_id(request, http_response)
         session_id = save_session(
             endpoint=endpoint,
             method=method,
@@ -206,6 +209,7 @@ def security_scan(request: Request, payload: ScanRequest) -> Dict[str, Any]:
             body=payload.body,
             sample_response=payload.sample_response,
             mode="security",
+            client_id=client_id,
         )
         save_test_cases(session_id, [
             {

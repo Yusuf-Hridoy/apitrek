@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.generator import generate_test_cases
@@ -21,6 +22,7 @@ from core.stability_check import (
     compare_responses,
     stability_skipped,
 )
+from web.client_id import ensure_browser_id
 from web.limiter import limiter, LIMIT_GENERATE
 from core.database import save_session, save_test_cases, delete_session
 
@@ -113,7 +115,7 @@ class GenerateRequest(BaseModel):
 
 @router.post("/generate-tests")
 @limiter.limit(LIMIT_GENERATE)
-def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]:
+def generate_tests(request: Request, response: Response, payload: GenerateRequest) -> Dict[str, Any]:
     """
     Generate structured API test cases using the Phase 1 AI engine.
     """
@@ -219,8 +221,9 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
 
     # Persist the session for history (best-effort; never breaks generation).
     # The mode is passed explicitly so functional runs never land in the
-    # security history bucket.
+    # security history bucket. History is scoped to this browser's anonymous id.
     try:
+        client_id = ensure_browser_id(request, response)
         session_id = save_session(
             endpoint=endpoint,
             method=method,
@@ -229,6 +232,7 @@ def generate_tests(request: Request, payload: GenerateRequest) -> Dict[str, Any]
             sample_response=sample_response,
             mode="functional",
             auth_check=auth_check,
+            client_id=client_id,
         )
         try:
             save_test_cases(session_id, _cases_for_db(result))

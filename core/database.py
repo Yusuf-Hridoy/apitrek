@@ -82,6 +82,7 @@ def init_db() -> None:
         _migrate_add_column(conn, "execution_results", "outcome", "TEXT")
         _migrate_add_column(conn, "sessions", "auth_check_json", "TEXT")
         _migrate_add_column(conn, "execution_results", "assertion_results_json", "TEXT")
+        _migrate_add_column(conn, "sessions", "client_id", "TEXT")
 
 
 def _migrate_add_column(
@@ -286,6 +287,7 @@ def save_session(
     sample_response: Optional[Any] = None,
     mode: str = "functional",
     auth_check: Optional[Dict[str, Any]] = None,
+    client_id: Optional[str] = None,
 ) -> int:
     """
     Insert a session row and return its id.
@@ -297,14 +299,19 @@ def save_session(
 
     ``auth_check`` holds only header names and the status — never values — so
     it is safe to persist for the history banner.
+
+    ``client_id`` is the anonymous per-browser id (the apitrek_sid cookie) that
+    scopes history to the browser that created it — it is a random UUID, never
+    an email or account. Rows saved without one (pre-scope data) belong to
+    nobody and never appear in anyone's history list.
     """
     with _connect() as conn:
         cursor = conn.execute(
             """
             INSERT INTO sessions (endpoint, method, headers_json, body_json,
                                   sample_response_json, created_at, mode,
-                                  auth_check_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                  auth_check_json, client_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 redact_url(endpoint),
@@ -315,6 +322,7 @@ def save_session(
                 _now(),
                 mode,
                 json.dumps(auth_check) if auth_check is not None else None,
+                client_id,
             ),
         )
         return int(cursor.lastrowid)
@@ -417,11 +425,18 @@ def save_execution_results(session_id: int, results: List[Dict[str, Any]]) -> in
     return len(rows)
 
 
-def get_recent_sessions(limit: int = 20) -> List[Dict[str, Any]]:
-    """Return the most recent sessions with pass/fail aggregates."""
-    with _connect() as conn:
-        rows = conn.execute(
-            """
+def get_recent_sessions(
+    limit: int = 20, client_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Return the most recent sessions with pass/fail aggregates.
+
+    ``client_id`` scopes the list to one browser (its anonymous apitrek_sid):
+    a visitor must never see endpoints another visitor tested. Rows saved
+    without a client_id belong to nobody and stay out of every list, so a
+    caller that handles web requests must always pass the caller's id.
+    ``None`` means no filter and is for internal/test use only.
+    """
+    sql = """
             SELECT s.id, s.endpoint, s.method, s.created_at, s.mode,
                    (SELECT COUNT(*) FROM test_cases t WHERE t.session_id = s.id) AS test_count,
                    (SELECT COUNT(*) FROM execution_results e
@@ -429,20 +444,33 @@ def get_recent_sessions(limit: int = 20) -> List[Dict[str, Any]]:
                    (SELECT COUNT(*) FROM execution_results e
                      WHERE e.session_id = s.id) AS executed_count
             FROM sessions s
-            ORDER BY s.id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        """
+    params: tuple = (limit,)
+    if client_id is not None:
+        sql += " WHERE s.client_id = ?"
+        params = (client_id, limit)
+    sql += " ORDER BY s.id DESC LIMIT ?"
+    with _connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
     return [dict(row) for row in rows]
 
 
-def get_session(session_id: int) -> Optional[Dict[str, Any]]:
-    """Return one session with its test cases and execution results, or None."""
+def get_session(
+    session_id: int, client_id: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Return one session with its test cases and execution results, or None.
+
+    When ``client_id`` is given, the session must belong to that browser —
+    anyone else's (or an ownerless legacy row) returns None so the route can
+    answer 404, which keeps session ids from being guessable across visitors.
+    """
+    sql = "SELECT * FROM sessions WHERE id = ?"
+    params: tuple = (session_id,)
+    if client_id is not None:
+        sql += " AND client_id = ?"
+        params = (session_id, client_id)
     with _connect() as conn:
-        session_row = conn.execute(
-            "SELECT * FROM sessions WHERE id = ?", (session_id,)
-        ).fetchone()
+        session_row = conn.execute(sql, params).fetchone()
         if session_row is None:
             return None
         test_cases = conn.execute(
