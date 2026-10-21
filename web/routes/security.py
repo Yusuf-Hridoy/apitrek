@@ -30,7 +30,7 @@ from exports.security_report_generator import (
 )
 from web.client_id import ensure_browser_id
 from web.limiter import limiter, LIMIT_SECURITY_SCAN
-from core.database import save_session, save_test_cases
+from core.database import save_session, save_test_cases, redact_payload
 
 router = APIRouter(tags=["security"])
 logger = logging.getLogger(__name__)
@@ -199,9 +199,24 @@ def security_scan(request: Request, http_response: Response, payload: ScanReques
     }
 
     # Persist the scan for history (best-effort; never breaks the scan).
-    # History is scoped to this browser's anonymous id.
+    # The full scan response is stored (with probe payloads redacted) so a
+    # history reload rebuilds the findings table, scorecard, and banner —
+    # not just the form. History is scoped to this browser's anonymous id.
     try:
         client_id = ensure_browser_id(request, http_response)
+        scan_record = {
+            "findings": [
+                {**f, "payload_used": redact_payload(f.get("payload_used"))}
+                for f in findings
+            ],
+            "risk_score": calculate_risk_score(findings),
+            "summary": summary,
+            "scan_duration_ms": scan_duration_ms,
+            "not_applicable": not_applicable,
+            # Legacy keys the risk-context note still reads.
+            "endpoint_is_public": scan_context["endpoint_is_public"],
+            "baseline_status": scan_context["baseline_status"],
+        }
         session_id = save_session(
             endpoint=endpoint,
             method=method,
@@ -210,6 +225,7 @@ def security_scan(request: Request, http_response: Response, payload: ScanReques
             sample_response=payload.sample_response,
             mode="security",
             client_id=client_id,
+            scan=scan_record,
         )
         save_test_cases(session_id, [
             {

@@ -115,3 +115,22 @@ def test_report_severity_counts_match_the_screen():
         assert "High: 1" in report
         assert "Medium: 1" in report
         assert "Low: 1" in report
+
+def test_reports_list_not_applicable_categories():
+    """The 'not applicable' categories appear in both report formats, so
+    silence never reads as 'ran clean'."""
+    results = _scan_results()
+    results["not_applicable"] = [
+        {"category": "API1:2023", "reason": "No object ids in the path."},
+    ]
+    md = generate_markdown_report(results, "https://api.example.com")
+    html = generate_html_report(results, "https://api.example.com")
+    assert "Not applicable" in md
+    assert "API1:2023" in md
+    assert "No object ids in the path." in md
+    assert "<h2>Not applicable</h2>" in html
+    assert "API1:2023" in html
+    # And when nothing was skipped, no empty section appears.
+    results["not_applicable"] = []
+    assert "Not applicable" not in generate_markdown_report(results, "https://api.example.com")
+    assert "Not applicable" not in generate_html_report(results, "https://api.example.com")
