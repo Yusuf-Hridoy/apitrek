@@ -957,18 +957,6 @@ textarea {
 .scorecard-body { flex: 1; min-width: 0; }
 .scorecard-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .scorecard-note { font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.5; }
-/* Phone-width functional cards: the title gets a full line and the controls
-   (status, Run/Re-run, chevron) sit on their own line, stacked like the
-   security findings cards — nothing clipped at ~380px. */
-@media (max-width: 640px) {
-    .case-row { flex-wrap: wrap; row-gap: 4px; }
-
-    .case-row .case-title {
-        flex: 1 1 100%;            /* full-width line of its own */
-    }
-
-    .case-row .case-row-meta { margin-left: auto; }
-}
 
 @media (max-width: 640px) {
     .scorecard { flex-direction: column; align-items: flex-start; }
@@ -1469,7 +1457,9 @@ button.stab-tag:focus-visible { outline: 2px solid var(--interactive); outline-o
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 100;
+    /* Above the fixed mobile menu button (z-index 120) — a modal must never
+       have the ☰ button floating over it. */
+    z-index: 200;
     padding: 1rem;
 }
 
@@ -1750,7 +1740,8 @@ button.stab-tag:focus-visible { outline: 2px solid var(--interactive); outline-o
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
-    z-index: 98;
+    /* Below the open drawer, above the fixed menu button (z-index 120) */
+    z-index: 128;
 }
 
 @media (max-width: 768px) {
@@ -1793,6 +1784,8 @@ button.stab-tag:focus-visible { outline: 2px solid var(--interactive); outline-o
         flex-direction: column;
         gap: 8px;
         font-size: 0.8125rem;
+        /* Sticky below the fixed menu button (top: 16px) so it never covers the summary text */
+        top: 3.25rem;
     }
 }
 
@@ -2499,7 +2492,8 @@ button:active:not(:disabled) {
         bottom: 0;
         height: 100%;
         width: 240px;
-        z-index: 99;
+        /* Above the fixed menu button (z-index 120) so the open drawer covers it */
+        z-index: 130;
         transition: left 0.3s ease;
     }
 
@@ -2701,6 +2695,22 @@ button:active:not(:disabled) {
 .case-row .btn-run { flex-shrink: 0; padding: 0.2rem 0.6rem; font-size: 0.75rem; }
 .case-row .chevron { flex-shrink: 0; color: var(--text-secondary); transition: transform 0.2s ease; }
 .case-item.open .chevron { transform: rotate(180deg); }
+
+/* Phone-width case cards (functional AND assertions tabs): the title gets a
+   full line of its own and the controls (status, Run/Re-run, chevron) sit on
+   their own line — nothing clipped to a few letters at ~380px. This block
+   lives AFTER .case-row .case-title above on purpose: same specificity, so
+   source order is what makes the full-width basis win on phones. */
+@media (max-width: 640px) {
+    .case-row { flex-wrap: wrap; row-gap: 4px; }
+
+    .case-row .case-title {
+        flex: 1 1 100%;            /* full-width line of its own */
+        min-width: 100%;
+    }
+
+    .case-row .case-row-meta { margin-left: auto; }
+}
 .case-body {
     padding: 0.5rem 0.7rem 0.7rem;
     border-top: 1px solid var(--border-color);
