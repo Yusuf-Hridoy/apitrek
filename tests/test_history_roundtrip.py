@@ -135,12 +135,12 @@ def test_generate_assigns_stable_assertion_ids(client):
         })
     data = r.json()
     ids = [a["id"] for a in data["assertions"]]
-    assert ids == ["AST-01", "AST-02"]
+    assert ids == ["TC-AST-01", "TC-AST-02"]
 
     session_id = data["_session_id"]
     s = client.get(f"/api/history/sessions/{session_id}").json()
     assertion_rows = [tc for tc in s["test_cases"] if tc["category"] == "assertion"]
-    assert [row["case_ref"] for row in assertion_rows] == ["AST-01", "AST-02"]
+    assert [row["case_ref"] for row in assertion_rows] == ["TC-AST-01", "TC-AST-02"]
 
 
 def test_live_run_results_match_by_assertion_id(client):
@@ -167,7 +167,7 @@ def test_live_run_results_match_by_assertion_id(client):
 
     s = client.get(f"/api/history/sessions/{session_id}").json()
     stored_ids = sorted(r["test_case_id"] for r in s["execution_results"])
-    assert stored_ids == ["AST-01", "AST-02"]
+    assert stored_ids == ["TC-AST-01", "TC-AST-02"]
 
 
 # --- security: scan response round-trip --------------------------------------
@@ -259,3 +259,58 @@ def test_execute_results_surface_failed_save(client):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+FAKE_GENERATE_MIXED = {
+    "positive_test_cases": [],
+    "negative_test_cases": [],
+    "edge_cases": [],
+    "assertions": [
+        {"category": "schema", "rule": "field 'id' is present", "severity": "high"},
+        {"category": "data", "rule": "args.name equals 'alice'", "severity": "medium"},
+        {"category": "schema", "rule": "field 'name' is a string", "severity": "low"},
+    ],
+}
+
+
+def test_every_assertion_result_restores_with_the_same_counts(client):
+    """A reloaded session must show what the live run showed — including the
+    Needs review count. Before assertions had ids every result was stored
+    under '' and all but one vanished on reload."""
+    live_outcomes = []
+    with patch("web.routes.generate.generate_test_cases",
+               return_value=dict(FAKE_GENERATE_MIXED)), \
+         patch("core.test_executor.safe_request") as mock_req:
+        mock_req.return_value = MagicMock(
+            status_code=200, text='{"id": 1}',
+            **{"json.return_value": {"id": 1, "name": "x"}})
+        r = client.post("/generate-tests", json={
+            "endpoint": "https://api.example.com/users/1", "method": "GET",
+        })
+        data = r.json()
+        ids = [a["id"] for a in data["assertions"]]
+        assert len(ids) == len(set(ids)) == 3   # unique, one per assertion
+
+        session_id = data["_session_id"]
+        for tc in data["assertions"]:
+            res = client.post("/api/execute-single", json={
+                "endpoint": "https://api.example.com/users/1", "method": "GET",
+                "test_case": {**tc, "category": "assertion"},
+                "session_id": session_id,
+            })
+            assert res.status_code == 200
+            live_outcomes.append(res.json()["outcome"])
+
+    # The live run had one needs-review (a value rule on a field the response
+    # never carried) and two passes.
+    assert sorted(live_outcomes) == ["needs_review", "passed", "passed"]
+
+    s = client.get(f"/api/history/sessions/{session_id}").json()
+    stored = s["execution_results"]
+    assert len(stored) == 3
+    assert sorted(r["test_case_id"] for r in stored) == sorted(ids)
+    stored_outcomes = sorted(r["outcome"] for r in stored)
+    assert stored_outcomes == sorted(live_outcomes)
+    # Every restored result carries its per-check detail, so the reloaded
+    # scorecard can be rebuilt exactly.
+    assert all(r["assertion_results"] for r in stored)

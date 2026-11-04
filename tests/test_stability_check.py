@@ -841,16 +841,22 @@ GOLDEN_8F1F241 = {
     "list_of_objects": {
         "sample": {"items": [{"sku": "a", "qty": 2}], "total": 3},
         "rules": ["items.sku should be a string"],
+        # The dotted path now resolves to the field it names (the shared rule
+        # parser reads "items.sku", where the old leaf-word search stopped at
+        # "items"). The top-level baseline checks are unchanged; stability is
+        # still what this test holds fixed.
         "pytest": [
             '    data = response.json()',
             '    # Validation: items.sku should be a string',
-            '    assert data["items"] is not None',
+            '    assert data["items"][0]["sku"] is not None',
+            '    assert isinstance(data["items"][0]["sku"], str)',
             '    assert isinstance(data["items"], list)',
             '    assert isinstance(data["total"], int)',
         ],
         "postman": [
             '    var jsonData = pm.response.json();',
-            "    pm.expect(jsonData[\"items\"]).to.be.an('array');",
+            "    pm.expect(jsonData[\"items\"][0][\"sku\"]).to.be.a('string');",
+            '    pm.expect(jsonData).to.have.property("items");',
             '    pm.expect(jsonData).to.have.property("total");',
         ],
     },

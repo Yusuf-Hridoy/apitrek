@@ -161,3 +161,87 @@ def test_generate_route_includes_sample_response():
     response = MagicMock(spec=Response)
     result = generate_tests(request, response, payload)
     assert result.get("sample_response") == sample
+
+
+# --- the rules the shared parser used to misread ------------------------------
+
+HTTPBIN_RESP = {
+    "args": {"empty": "", "foo": "bar", "num": "123"},
+    "headers": {"User-Agent": "qa-engine/1.0 (integration test)"},
+    "url": "https://httpbin.org/get",
+}
+
+HTTPBIN_RULES = [
+    "response.url equals 'https://httpbin.org/get'",
+    "response.args.foo equals 'bar'",
+    "response.args.empty equals ''",
+    "response.headers['User-Agent'] equals 'qa-engine/1.0 (integration test)'",
+    "GET https://httpbin.org/uuid must return HTTP 200 under normal conditions",
+    "The 'origin' field must match IPv4 address pattern (e.g., 1.2.3.4)",
+]
+
+
+def test_wrapper_and_bracket_rules_reach_the_real_field():
+    lines = "\n".join(pytest_assertions(HTTPBIN_RESP, HTTPBIN_RULES))
+    # The wrapper is stripped on the way to the real path...
+    assert 'data["url"]' in lines
+    assert 'data["args"]["foo"]' in lines
+    # ...and bracket notation names the header, not a field called "headers".
+    assert 'data["headers"]["User-Agent"]' in lines
+    # A host name and an abbreviation are never exported as fields.
+    assert '"httpbin"' not in lines
+    assert '"e"]["g"' not in lines
+
+
+def test_generated_pytest_for_these_rules_runs_against_the_sample():
+    """Not just parseable — the checks actually pass on the real body."""
+    lines = pytest_assertions(HTTPBIN_RESP, HTTPBIN_RULES)
+    source = "def _check(response):\n" + "\n".join(lines) + "\n"
+    ast.parse(source)  # valid Python
+
+    class _FakeResponse:
+        @staticmethod
+        def json():
+            return HTTPBIN_RESP
+
+    namespace = {}
+    exec(compile(source, "<generated>", "exec"), namespace)
+    namespace["_check"](_FakeResponse())  # raises if any assert fails
+
+
+def test_full_pytest_export_for_these_rules_is_valid():
+    test_data = {
+        "positive_test_cases": [
+            {
+                "id": "TC-POS-01",
+                "title": "Valid response",
+                "expected": {"status_code": 200, "validation_rules": HTTPBIN_RULES},
+            }
+        ],
+        "assertions": [{"rule": r, "category": "data"} for r in HTTPBIN_RULES],
+        "sample_response": HTTPBIN_RESP,
+    }
+    script = generate_pytest_script("https://httpbin.org/get", "GET", test_data)
+    ast.parse(script)  # valid Python
+
+
+def test_full_postman_export_for_these_rules_is_valid():
+    import json
+
+    test_data = {
+        "positive_test_cases": [
+            {
+                "id": "TC-POS-01",
+                "title": "Valid response",
+                "expected": {"status_code": 200, "validation_rules": HTTPBIN_RULES},
+            }
+        ],
+        "assertions": [{"rule": r, "category": "data"} for r in HTTPBIN_RULES],
+        "sample_response": HTTPBIN_RESP,
+    }
+    collection = generate_postman_collection(
+        "https://httpbin.org/get", "GET", test_data
+    )
+    parsed = json.loads(collection)  # valid v2.1 JSON
+    script = "\n".join(parsed["item"][0]["event"][0]["script"]["exec"])
+    assert 'jsonData["headers"]["User-Agent"]' in script

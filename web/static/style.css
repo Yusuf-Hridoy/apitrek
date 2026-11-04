@@ -2663,6 +2663,11 @@ button:active:not(:disabled) {
 .case-item:hover { transform: none; box-shadow: none; }
 .case-row {
     display: flex;
+    /* Wrap on every width: an assertion row carrying both the grounding
+       badge and the stability tag has to put the tags on their own line
+       rather than crush the title. */
+    flex-wrap: wrap;
+    row-gap: 4px;
     align-items: center;
     gap: 0.5rem;
     padding: 0.4rem 0.7rem;
@@ -2681,7 +2686,11 @@ button:active:not(:disabled) {
 }
 .case-row .case-title {
     flex: 1;
-    min-width: 0;
+    /* A readable floor: when the badges (verified + "changes each call")
+       leave less than this, the row wraps and the title keeps a full line
+       instead of squeezing to a few letters. The phone rules below widen
+       this to 100%. */
+    min-width: 16ch;
     font-weight: 500;
     font-size: 0.85rem;
     line-height: 1.3;

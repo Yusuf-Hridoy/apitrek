@@ -804,5 +804,275 @@ def test_assertion_case_with_absent_value_field_is_needs_review(mock_request):
     assert "isn't in the response" in entry["detail"]
 
 
+
+# --- HIGH-1: common rules the checker used to misread --------------------------
+
+# The body httpbin.org/get really returns, trimmed to what the rules touch.
+HTTPBIN_BODY = {
+    "args": {"empty": "", "foo": "bar", "num": "123"},
+    "headers": {"User-Agent": "qa-engine/1.0 (integration test)"},
+    "url": "https://httpbin.org/get",
+}
+
+
+def test_response_wrapper_path_resolves():
+    """`response.url` is the body's `url` — not a missing field."""
+    ok, detail, verifiable = _run_assertion_rule(
+        "response.url equals 'https://httpbin.org/get'", HTTPBIN_BODY, 200)
+    assert (ok, verifiable) == (True, True)
+    assert "isn't in the response" not in detail
+
+
+def test_response_wrapper_nested_path_resolves():
+    ok, _, verifiable = _run_assertion_rule(
+        "response.args.foo equals 'bar'", HTTPBIN_BODY, 200)
+    assert (ok, verifiable) == (True, True)
+
+
+def test_empty_expected_value_is_captured():
+    """`equals ''` is a real expectation: the field is there and empty."""
+    ok, _, verifiable = _run_assertion_rule(
+        "response.args.empty equals ''", HTTPBIN_BODY, 200)
+    assert (ok, verifiable) == (True, True)
+
+
+def test_bracket_header_path_reads_the_echoed_header():
+    """The header name sat in brackets; it used to become the VALUE while the
+    field became 'response.headers'."""
+    ok, detail, verifiable = _run_assertion_rule(
+        "response.headers['User-Agent'] equals 'qa-engine/1.0 (integration test)'",
+        HTTPBIN_BODY, 200, response_headers={})
+    assert (ok, verifiable) == (True, True)
+    assert "MISSING" not in detail
+
+
+def test_bracket_header_path_falls_back_to_real_headers():
+    """Not echoed in the body: look it up in the real response headers,
+    case-insensitively. The value is never printed."""
+    ok, detail, verifiable = _run_assertion_rule(
+        "response.headers['Content-Encoding'] equals 'gzip'",
+        {"id": 1}, 200, response_headers={"content-encoding": "gzip"})
+    assert (ok, verifiable) == (True, True)
+
+    ok, detail, verifiable = _run_assertion_rule(
+        "response.headers['Content-Encoding'] equals 'gzip'",
+        {"id": 1}, 200, response_headers={"Content-Encoding": "br"})
+    assert (ok, verifiable) == (False, True)
+    assert "br" not in detail          # header values are never printed
+    assert "<str>" in detail
+
+
+def test_status_rule_without_the_word_status():
+    """"must return HTTP 200" used to fall through to field checking and fail
+    on a field called 'httpbin.org'."""
+    rule = "GET https://httpbin.org/uuid must return HTTP 200 under normal conditions"
+    ok, detail, verifiable = _run_assertion_rule(rule, {"uuid": "x"}, 200)
+    assert (ok, verifiable) == (True, True)
+    assert "httpbin.org" not in detail
+
+    ok, _, verifiable = _run_assertion_rule(rule, {"uuid": "x"}, 500)
+    assert (ok, verifiable) == (False, True)
+
+
+def test_abbreviation_is_not_treated_as_a_field():
+    """The field is 'origin', never 'e.g'."""
+    rule = "The 'origin' field must match IPv4 address pattern (e.g., 1.2.3.4)"
+    ok, detail, _ = _run_assertion_rule(rule, {"origin": "1.2.3.4"}, 200)
+    assert ok is True
+    assert "'origin'" in detail
+    assert "e.g" not in detail
+
+
+def test_real_value_mismatch_still_fails():
+    ok, detail, verifiable = _run_assertion_rule(
+        "response.args.foo equals 'baz'", HTTPBIN_BODY, 200)
+    assert (ok, verifiable) == (False, True)
+    assert "value differs" in detail
+
+
+def test_presence_rule_on_missing_field_still_fails_after_the_fix():
+    ok, detail, verifiable = _run_assertion_rule('"id" is present', {}, 200)
+    assert (ok, verifiable) == (False, True)
+    assert "field 'id' MISSING" in detail
+
+
+def test_real_top_level_response_key_is_used_as_written():
+    """An API that really returns {"response": {...}} is not unwrapped away."""
+    ok, _, verifiable = _run_assertion_rule(
+        "response.ok equals 'true'", {"response": {"ok": True}}, 200)
+    assert (ok, verifiable) == (True, True)
+
+
+def test_data_prefix_is_never_stripped():
+    ok, detail, verifiable = _run_assertion_rule(
+        "data.id is an integer", {"data": {"id": 5}}, 200)
+    assert (ok, verifiable) == (True, True)
+    assert "type integer OK" in detail
+
+
+def test_multi_case_status_rule_is_needs_review():
+    ok, detail, verifiable = _run_assertion_rule(
+        "Successful GET must return 200; auth failures must return 401/403",
+        {"id": 1}, 200)
+    assert ok is False
+    assert verifiable is False
+    assert "different results for different cases" in detail
+
+
+def test_status_alternatives_pass_on_either_code():
+    ok, detail, verifiable = _run_assertion_rule(
+        "status must be 200 or 201", {"id": 1}, 201)
+    assert (ok, verifiable) == (True, True)
+    assert detail == "Expected HTTP 200 or 201, got 201"
+
+    ok, _, verifiable = _run_assertion_rule(
+        "status must be 200 or 201", {"id": 1}, 400)
+    assert (ok, verifiable) == (False, True)
+
+
+def test_value_comparison_tolerates_type_and_whitespace():
+    ok, _, _ = _run_assertion_rule(
+        "response.args.num equals '123'", HTTPBIN_BODY, 200)
+    assert ok is True
+    ok, _, _ = _run_assertion_rule("data.count equals '10'", {"data": {"count": 10}}, 200)
+    assert ok is True
+    ok, _, _ = _run_assertion_rule("data.ok equals 'true'", {"data": {"ok": True}}, 200)
+    assert ok is True
+
+
+# --- HIGH-2: login tests send the credential they describe ---------------------
+
+FORM_HEADERS = {"Cookie": "token=REAL"}
+
+
+def _login_case(title, category, case_headers, expected_status, description=""):
+    return {
+        "id": "TC-1", "title": title, "category": category,
+        "description": description,
+        "request": {"endpoint": ENDPOINT, "method": "PUT",
+                    "headers": case_headers, "body": {"firstname": "x"}},
+        "expected": {"status_code": expected_status},
+    }
+
+
+@patch("core.test_executor.safe_request")
+def test_missing_cookie_test_sends_no_cookie(mock_request):
+    """A test whose whole point is the missing login must send no login."""
+    mock_request.return_value = _mock_response(status=403)
+    case = _login_case("Missing session cookie", "negative", {}, 401)
+    execute_test_case(case, ENDPOINT, "PUT", headers=dict(FORM_HEADERS),
+                      body={"firstname": "x"})
+    _, kwargs = mock_request.call_args
+    assert "Cookie" not in kwargs["headers"]
+
+
+@patch("core.test_executor.safe_request")
+def test_expired_token_test_sends_the_expired_token(mock_request):
+    mock_request.return_value = _mock_response(status=403)
+    case = _login_case("Expired session token", "negative",
+                       {"Cookie": "token=expired456"}, 403)
+    execute_test_case(case, ENDPOINT, "PUT", headers=dict(FORM_HEADERS),
+                      body={"firstname": "x"})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["Cookie"] == "token=expired456"
+
+
+@patch("core.test_executor.safe_request")
+def test_validation_negative_keeps_the_real_login(mock_request):
+    """A null-firstname test is about the body, not the login — the real
+    cookie still wins over the AI's invented one."""
+    mock_request.return_value = _mock_response(status=400)
+    case = _login_case("Null firstname", "negative",
+                       {"Cookie": "token=valid123"}, 400)
+    execute_test_case(case, ENDPOINT, "PUT", headers=dict(FORM_HEADERS),
+                      body={"firstname": "x"})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["Cookie"] == "token=REAL"
+
+
+@patch("core.test_executor.safe_request")
+def test_malformed_cookie_edge_case_is_a_login_test_by_keyword(mock_request):
+    """It expects 400, so is_auth_test says no — the title is what marks it."""
+    mock_request.return_value = _mock_response(status=400)
+    case = _login_case("Malformed cookie (missing equals sign)", "edge",
+                       {"Cookie": "tokenREAL"}, 400)
+    execute_test_case(case, ENDPOINT, "PUT", headers=dict(FORM_HEADERS),
+                      body={"firstname": "x"})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["Cookie"] == "tokenREAL"
+
+
+@patch("core.test_executor.safe_request")
+def test_positive_mentioning_token_still_sends_the_real_login(mock_request):
+    """Positives are never login tests, whatever their title says."""
+    mock_request.return_value = _mock_response(status=200)
+    case = _login_case("Valid update with a token", "positive",
+                       {"Cookie": "token=valid123"}, 200)
+    execute_test_case(case, ENDPOINT, "PUT", headers=dict(FORM_HEADERS),
+                      body={"firstname": "x"})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["Cookie"] == "token=REAL"
+
+
+@patch("core.test_executor.safe_request")
+def test_assertion_case_about_auth_still_sends_the_real_login(mock_request):
+    mock_request.return_value = _mock_response(status=200)
+    case = _login_case("Auth token is accepted", "assertion",
+                       {"Cookie": "token=valid123"}, 200)
+    execute_test_case(case, ENDPOINT, "PUT", headers=dict(FORM_HEADERS),
+                      body={"firstname": "x"})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"]["Cookie"] == "token=REAL"
+
+
+@patch("core.test_executor.safe_request")
+def test_login_test_info_line_labels_the_test_credential(mock_request):
+    mock_request.return_value = _mock_response(status=403)
+    case = _login_case("Expired session token", "negative",
+                       {"Cookie": "token=expired456"}, 403)
+    result = execute_test_case(case, ENDPOINT, "PUT", headers=dict(FORM_HEADERS),
+                               body={"firstname": "x"})
+    info = next(a for a in result["assertion_results"] if a.get("kind") == "info")
+    assert "Cookie (test value, not your login)" in info["detail"]
+    assert "expired456" not in info["detail"]
+    assert "REAL" not in info["detail"]
+
+
+@patch("core.test_executor.safe_request")
+def test_login_test_without_a_credential_lists_none(mock_request):
+    mock_request.return_value = _mock_response(status=403)
+    case = _login_case("Missing session cookie", "negative", {}, 401)
+    result = execute_test_case(case, ENDPOINT, "PUT", headers=dict(FORM_HEADERS),
+                               body={"firstname": "x"})
+    info = next(a for a in result["assertion_results"] if a.get("kind") == "info")
+    assert "Cookie" not in info["detail"]
+    assert "REAL" not in info["detail"]
+
+
+@patch("core.test_executor.safe_request")
+def test_login_test_keeps_non_credential_form_headers(mock_request):
+    """Only the credential is dropped — the rest of the form still applies."""
+    mock_request.return_value = _mock_response(status=403)
+    case = _login_case("Missing session cookie", "negative", {}, 401)
+    execute_test_case(
+        case, ENDPOINT, "PUT",
+        headers={"Cookie": "token=REAL", "Content-Type": "application/json"},
+        body={"firstname": "x"})
+    _, kwargs = mock_request.call_args
+    assert kwargs["headers"] == {"Content-Type": "application/json"}
+
+
+@patch("core.test_executor.safe_request")
+def test_login_test_empty_case_header_omits_it(mock_request):
+    mock_request.return_value = _mock_response(status=403)
+    case = _login_case("Expired session token", "negative",
+                       {"Cookie": "", "X-Trace": "1"}, 403)
+    execute_test_case(case, ENDPOINT, "PUT", headers=dict(FORM_HEADERS),
+                      body={"firstname": "x"})
+    _, kwargs = mock_request.call_args
+    assert "Cookie" not in kwargs["headers"]
+    assert kwargs["headers"]["X-Trace"] == "1"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

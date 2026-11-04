@@ -74,8 +74,9 @@ def _cases_for_db(result: Dict[str, Any]) -> list:
             "severity": assertion.get("severity"),
             "grounded": assertion.get("grounded", False),
             # The runner keys execution results by case id; assertions get a
-            # stable generated id (AST-01...) above so every assertion result
-            # restores onto the right card instead of colliding on an empty id.
+            # stable generated id (TC-AST-01...) above so every assertion
+            # result restores onto the right card instead of colliding on an
+            # empty id.
             "case_ref": assertion.get("id"),
         })
     return rows
@@ -204,7 +205,8 @@ def generate_tests(request: Request, response: Response, payload: GenerateReques
     # collide across every assertion in the session and silently drop results
     # on history reload). _cases_for_db persists the same id as case_ref.
     for i, assertion in enumerate(result.get("assertions") or [], start=1):
-        assertion.setdefault("id", f"AST-{i:02d}")
+        if isinstance(assertion, dict) and not assertion.get("id"):
+            assertion["id"] = f"TC-AST-{i:02d}"
 
     # expose the fetched response so exporters can build schema-driven assertions
     if sample_response is not None:
@@ -254,12 +256,20 @@ def generate_tests(request: Request, response: Response, payload: GenerateReques
             # Cases are the point of a history row — a session that saved no
             # test rows would reload as a useless "0 tests" entry. Drop the
             # session instead of leaving a misleading one behind.
-            logger.warning("Failed to save test cases for %s: %s", endpoint, e)
+            logger.warning(
+                "Failed to save test cases for %s: %s: %s",
+                endpoint, type(e).__name__, e,
+            )
             delete_session(session_id)
             session_id = None
         if session_id is not None:
             result["_session_id"] = session_id
     except Exception as e:
-        logger.warning("Failed to save session for %s: %s", endpoint, e)
+        # The browser still gets its tests; it just won't have a history row.
+        # The exception type is logged so a cookie/storage failure is
+        # distinguishable from a database one.
+        logger.warning(
+            "Failed to save session for %s: %s: %s", endpoint, type(e).__name__, e
+        )
 
     return result

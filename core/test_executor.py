@@ -13,19 +13,22 @@ cannot verify mechanically is not a pass; and a request the HTTP client or the
 SSRF guard refused is "not run", not a failure of the API.
 """
 import copy
-import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
 from core.assertion_rules import (
+    MULTI_CASE_STATUS_REASON,
     resolve_field_path,
     rule_checks_value,
     rule_field_and_value,
     rule_implies_absence,
+    status_code_rule,
+    unwrap_field_path,
+    values_equal,
 )
-from core.auth_check import _normalize_expected_status
+from core.auth_check import _normalize_expected_status, is_auth_test
 from core.database import _SENSITIVE_HEADER_HINTS, _is_sensitive_body_key
 from core.url_guard import safe_request, BlockedURLError
 
@@ -74,102 +77,162 @@ def _run_assertion_rule(
     Evaluate one free-text validation rule as best as mechanically possible.
 
     Shares its rule interpretation with the export translator
-    (``core.assertion_rules``): the first quoted token is the field or
-    header, a second quoted token after an equals-style phrase is the
+    (``core.assertion_rules``): the first dotted path (or quoted name) is the
+    field or header, a quoted token after an equals-style phrase is the
     expected VALUE (never a field name), and negation means the field or
-    header must be ABSENT. Dotted paths ("data.id") resolve through nested
-    objects. A VALUE comparison ("equals 'alice'") on a field the response
-    doesn't contain is verifiable=False — Needs Review, not a failure —
-    while a presence rule on a missing field stays a fail. Header rules are
-    verified against the response headers, never the body, and header VALUES
-    are never printed. Rules that cannot be checked mechanically are flagged
+    header must be ABSENT. A ``response.``/``body.``/``json.`` wrapper is
+    tried as written and then stripped, and ``headers['User-Agent']`` reads
+    as a header path. A VALUE comparison ("equals 'alice'") on a field the
+    response doesn't contain is verifiable=False — Needs Review, not a
+    failure — while a presence rule on a missing field stays a fail. Header
+    VALUES are never printed. Rules that cannot be checked mechanically
+    (including one rule describing several different cases) are flagged
     verifiable=False so the UI can distinguish them from real passes — they
     never count as passed checks.
     """
     rule = str(rule)
     lowered = rule.lower()
 
-    # Status-code rules: "status code is 200", "returns 404 on missing resource"
-    if "status" in lowered:
-        match = re.search(r"\b(\d{3})\b", rule)
-        if match:
-            code = int(match.group(1))
-            return status_code == code, f"Expected HTTP {code}, got {status_code}", True
+    # Status-code rules first: "status code is 200", "must return HTTP 200",
+    # "responds with 201". Recognized even without the word "status".
+    status_rule = status_code_rule(rule)
+    if status_rule is not None:
+        if status_rule["multi_case"]:
+            # "200 on success; 401 on auth failure" — one run can't decide it.
+            return False, MULTI_CASE_STATUS_REASON, False
+        codes = status_rule["codes"]
+        joined = " or ".join(str(c) for c in codes)
+        return status_code in codes, f"Expected HTTP {joined}, got {status_code}", True
 
     target, expected_value = rule_field_and_value(rule)
     if target is None:
         return False, "Rule not mechanically verifiable — manual review recommended", False
     wants_absent = rule_implies_absence(rule)
 
-    def _value_repr(value: Any) -> str:
-        # Compare quietly; truncate long values. A rule about a
-        # credential-shaped field prints its type, not its content.
-        if _is_sensitive_body_key(str(target).split(".")[-1]):
+    # "response.headers['User-Agent']" names a header inside a path.
+    unwrapped = unwrap_field_path(target) or target
+    segments = unwrapped.split(".")
+    header_path = len(segments) > 1 and segments[0].lower() == "headers"
+
+    def _value_repr(value: Any, redact: bool = False) -> str:
+        # Compare quietly; truncate long values. A header value, and any
+        # credential-shaped field, prints its type rather than its content.
+        if redact or _is_sensitive_body_key(str(target).split(".")[-1]):
             return f"<{type(value).__name__}>"
         text = repr(value)
         return text if len(text) <= 80 else text[:77] + "..."
 
-    # Header-targeted rules: check the response headers, not the body.
-    if "header" in lowered:
+    def _check_header(name: str):
+        """Check one header against the real response headers, or None when
+        the response carried no readable headers."""
         try:
             header_map = {str(k).lower(): v for k, v in (response_headers or {}).items()}
         except Exception:
-            header_map = None
-        if header_map is not None:
-            present = target.lower() in header_map
-            if wants_absent:
-                if present:
-                    return False, f"header '{target}' present, expected absent", True
-                return True, f"header '{target}' absent", True
-            if not present:
-                return False, f"header '{target}' MISSING", True
-            detail = f"header '{target}' present"
-            if expected_value is not None:
-                if str(header_map[target.lower()]) == expected_value:
-                    detail += ", value matches"
-                else:
-                    return False, (
-                        detail + f", value differs (expected {expected_value!r}, "
-                        f"got {_value_repr(header_map[target.lower()])})"
-                    ), True
-            return True, detail, True
+            return None
+        present = str(name).lower() in header_map
+        if wants_absent:
+            if present:
+                return False, f"header '{name}' present, expected absent", True
+            return True, f"header '{name}' absent", True
+        if not present:
+            return False, f"header '{name}' MISSING", True
+        detail = f"header '{name}' present"
+        if expected_value is not None:
+            actual = header_map[str(name).lower()]
+            if values_equal(actual, expected_value):
+                return True, detail + ", value matches", True
+            return False, (
+                detail + f", value differs (expected {expected_value!r}, "
+                f"got {_value_repr(actual, redact=True)})"
+            ), True
+        return True, detail, True
+
+    def _check_field(found: bool, value: Any, redact: bool = False):
+        if wants_absent:
+            if found:
+                return False, f"field '{target}' present, expected absent", True
+            return True, f"field '{target}' absent", True
+        if not found:
+            if rule_checks_value(rule, expected_value):
+                # A value comparison on a field that isn't there has nothing
+                # to compare — not a failure, just unverifiable (Needs
+                # Review): the rule may assume a field the request never sent.
+                return False, (
+                    f"field '{target}' isn't in the response, so its value can't be "
+                    "checked — the test may assume a field that wasn't sent"
+                ), False
+            return False, f"field '{target}' MISSING", True
+        if expected_value is not None:
+            if values_equal(value, expected_value):
+                return True, f"field '{target}' value matches", True
+            return False, (
+                f"field '{target}' value differs (expected {expected_value!r}, "
+                f"got {_value_repr(value, redact)})"
+            ), True
+        detail = f"field '{target}' present"
+        for word in _TYPE_WORDS:
+            if word in lowered:
+                if _type_matches(value, word):
+                    return True, detail + f", type {word} OK", True
+                return False, (
+                    detail + f", expected type {word} (got {type(value).__name__})"
+                ), True
+        return True, detail, True
+
+    if header_path:
+        # Plenty of APIs (httpbin and friends) echo the request headers in
+        # the body — look there first, then at the real response headers.
+        found, value = resolve_field_path(response_data, target)
+        if found:
+            return _check_field(True, value, redact=True)
+        result = _check_header(".".join(segments[1:]))
+        if result is not None:
+            return result
+        return _check_field(False, None, redact=True)
+
+    # Header-targeted rules: check the response headers, not the body.
+    if "header" in lowered:
+        result = _check_header(target)
+        if result is not None:
+            return result
 
     # Field rules: dotted paths resolve through nested objects/lists.
     found, value = resolve_field_path(response_data, target)
-    if wants_absent:
-        if found:
-            return False, f"field '{target}' present, expected absent", True
-        return True, f"field '{target}' absent", True
-    if not found:
-        if rule_checks_value(rule, expected_value):
-            # A value comparison on a field that isn't there has nothing to
-            # compare — not a failure, just unverifiable (Needs Review): the
-            # rule may assume a field the request never sent.
-            return False, (
-                f"field '{target}' isn't in the response, so its value can't be "
-                "checked — the test may assume a field that wasn't sent"
-            ), False
-        return False, f"field '{target}' MISSING", True
-    if expected_value is not None:
-        if str(value) == expected_value:
-            return True, f"field '{target}' value matches", True
-        return False, (
-            f"field '{target}' value differs (expected {expected_value!r}, "
-            f"got {_value_repr(value)})"
-        ), True
-    detail = f"field '{target}' present"
-    for word in _TYPE_WORDS:
-        if word in lowered:
-            if _type_matches(value, word):
-                detail += f", type {word} OK"
-                return True, detail, True
-            return False, detail + f", expected type {word} (got {type(value).__name__})", True
-    return True, detail, True
+    return _check_field(found, value)
 
 
 def _is_sensitive_header(name: Any) -> bool:
     lowered = str(name).lower()
     return any(hint in lowered for hint in _SENSITIVE_HEADER_HINTS)
+
+
+# Words that mark a negative/edge test as being ABOUT the login itself.
+_LOGIN_TEST_WORDS = (
+    "auth", "login", "logged", "token", "cookie", "session", "credential",
+    "jwt", "bearer", "api key", "apikey", "unauthorized", "forbidden",
+    "expired", "signature",
+)
+
+
+def _is_login_test(test_case: Dict[str, Any]) -> bool:
+    """True when this case exists to test the login itself.
+
+    A login test is a negative or edge case that either expects only 401/403
+    (``core.auth_check.is_auth_test``) or says in its title/description that
+    the credential is what it attacks ("Missing session cookie", "Expired
+    token"). Such a test must send the broken or missing credential it
+    describes; every other test keeps the user's real one.
+    """
+    if not isinstance(test_case, dict):
+        return False
+    if test_case.get("category", "positive") not in ("negative", "edge"):
+        return False
+    if is_auth_test(test_case):
+        return True
+    text = (
+        f"{test_case.get('title') or ''} {test_case.get('description') or ''}"
+    ).lower()
+    return any(word in text for word in _LOGIN_TEST_WORDS)
 
 
 def _build_request(
@@ -178,27 +241,32 @@ def _build_request(
     method: str,
     headers: Optional[Dict[str, Any]],
     body: Optional[Dict[str, Any]],
-) -> Tuple[str, str, Dict[str, Any], Any, List[str]]:
+) -> Tuple[str, str, Dict[str, Any], Any, List[str], List[str]]:
     """
     Build the HTTP request for a test case — the same request its export
     would send. Cases carry their own ``request`` object; it wins over the
-    form for the body, and case headers apply on top of the form headers,
-    with one hard rule that holds for EVERY category:
+    form for the body, and case headers apply on top of the form headers.
+    How credential headers are treated depends on what the test is FOR:
 
-      - a case header that carries a credential (Authorization, Cookie, API
-        key, ...) is the AI guessing — it is IGNORED. The form's real
-        credential always wins; if the form has none, the invented header is
-        dropped rather than send a fabricated ``token=valid123``. A negative
-        test may only drop or change the one thing it attacks; it never gets
-        to swap the user's real login for a fake one.
-      - any other case header applies on top of the form's
-      - a case header with an empty-string value means "omit this header"
-        (non-credential headers only)
+      - a LOGIN test (``_is_login_test``: a negative/edge case about the
+        login itself) starts from the form headers MINUS the credentials and
+        then applies every case header as written — a missing, expired or
+        malformed credential IS the test, so sending the user's real login
+        instead would make it impossible to fail. A case with no credential
+        header sends none; a case header set to "" omits that header.
+      - every OTHER test (all positives, assertions, and negatives/edges
+        about validation rather than login) keeps the form's real credential:
+        a case header that carries a credential is the AI guessing and is
+        IGNORED, so a fabricated ``token=valid123`` is never sent. Any other
+        case header applies on top of the form's, and "" omits it.
 
     A case with no ``request`` at all falls back to a generic per-category
     mutation; the returned notes say so explicitly.
 
-    Returns (url, method, headers, body, fallback_notes).
+    Returns (url, method, headers, body, fallback_notes, test_credentials),
+    where test_credentials names the credential headers that came from the
+    test case (values from the test, not the user's login) so the info line
+    can say so without printing them.
     """
     tc_request = test_case.get("request")
     if not isinstance(tc_request, dict):
@@ -207,21 +275,39 @@ def _build_request(
     if tc_request:
         url = tc_request.get("endpoint") or endpoint
         req_method = (tc_request.get("method") or method or "GET").upper()
+        case_headers = tc_request.get("headers") or {}
+        test_credentials: List[str] = []
 
-        req_headers = dict(headers or {})
-        for key, value in (tc_request.get("headers") or {}).items():
-            if _is_sensitive_header(key):
-                # The AI often writes a fabricated credential into the case.
-                # The user's real credentials are kept on every test; an
-                # invented credential (with or without a real counterpart) is
-                # never sent. Real missing/invalid-auth probing lives in the
-                # security scan, which does it cookie-aware and deliberately.
-                continue
-            if value == "":
-                # Explicit "omit this header"
-                req_headers.pop(key, None)
-            else:
+        if _is_login_test(test_case):
+            # The credential is what this test attacks: drop the real one and
+            # send exactly what the case describes (possibly nothing).
+            req_headers = {
+                key: value
+                for key, value in (headers or {}).items()
+                if not _is_sensitive_header(key)
+            }
+            for key, value in case_headers.items():
+                if value == "":
+                    # Explicit "omit this header"
+                    req_headers.pop(key, None)
+                    continue
                 req_headers[key] = value
+                if _is_sensitive_header(key):
+                    test_credentials.append(str(key))
+        else:
+            req_headers = dict(headers or {})
+            for key, value in case_headers.items():
+                if _is_sensitive_header(key):
+                    # The AI often writes a fabricated credential into the
+                    # case. On a test that isn't about the login, the user's
+                    # real credential wins; an invented one (with or without
+                    # a real counterpart) is never sent.
+                    continue
+                if value == "":
+                    # Explicit "omit this header"
+                    req_headers.pop(key, None)
+                else:
+                    req_headers[key] = value
 
         if "body" in tc_request:
             # The case body wins even when it is None or {} — deliberate.
@@ -230,7 +316,7 @@ def _build_request(
             req_body = copy.deepcopy(tc_request["body"])
         else:
             req_body = copy.deepcopy(body)
-        return url, req_method, req_headers, req_body, []
+        return url, req_method, req_headers, req_body, [], test_credentials
 
     # --- fallback: no scenario request in this case ---
     url = endpoint
@@ -269,19 +355,33 @@ def _build_request(
         else:
             notes.append("no request body to mutate; sent as-is")
 
-    return url, req_method, req_headers, req_body, notes
+    return url, req_method, req_headers, req_body, notes, []
 
 
 def _describe_request(
-    method: str, url: str, req_headers: Dict[str, Any], req_body: Any
+    method: str,
+    url: str,
+    req_headers: Dict[str, Any],
+    req_body: Any,
+    test_credentials: Optional[List[str]] = None,
 ) -> str:
     """One masked info line about what was actually sent: header NAMES only
-    (sensitive ones marked), never header values or body contents."""
+    (sensitive ones marked), never header values or body contents.
+
+    A credential that came from the test case itself (a login test sending a
+    missing, expired or malformed credential) is labelled as such, so nobody
+    reads the line as "my real login was sent". The value is still never
+    shown. When a login test sends no credential at all, none is listed."""
+    labelled = {str(name) for name in (test_credentials or [])}
     if req_headers:
-        names = [
-            f"{key} (masked)" if _is_sensitive_header(key) else str(key)
-            for key in req_headers
-        ]
+        names = []
+        for key in req_headers:
+            if str(key) in labelled:
+                names.append(f"{key} (test value, not your login)")
+            elif _is_sensitive_header(key):
+                names.append(f"{key} (masked)")
+            else:
+                names.append(str(key))
         header_part = f"headers: {', '.join(names)}"
     else:
         header_part = "no headers"
@@ -335,13 +435,16 @@ def execute_test_case(
 
     start = time.perf_counter()
     try:
-        url, req_method, req_headers, req_body, fallback_notes = _build_request(
+        (url, req_method, req_headers, req_body, fallback_notes,
+         test_credentials) = _build_request(
             test_case, endpoint, method, headers, body
         )
         assertion_results.append({
             "kind": "info",
             "assertion": "Request sent",
-            "detail": _describe_request(req_method, url, req_headers, req_body),
+            "detail": _describe_request(
+                req_method, url, req_headers, req_body, test_credentials
+            ),
         })
         for note in fallback_notes:
             assertion_results.append({

@@ -18,7 +18,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.assertion_rules import quoted_tokens
+from core.assertion_rules import rule_field_and_value, unwrap_field_path
 
 # path segments; each element is (key, is_list) so we can build correct accessors
 FieldPath = Tuple[Tuple[str, bool], ...]
@@ -93,17 +93,22 @@ def _match_rule(rule: str, fields: Dict[FieldPath, Any]) -> Optional[FieldPath]:
     """Return a real field path the rule refers to (longest leaf match wins).
 
     Shares the rule interpretation with the live runner
-    (``core.assertion_rules``): a quoted dotted path ("args.name") is
-    resolved exactly first — its first quoted token is the field, never the
-    expected value. Falls back to a leaf word search for rules without
-    quoted tokens.
+    (``core.assertion_rules``): the rule's FIELD — a dotted path, bracket
+    notation or a quoted name, never the expected value — is resolved
+    exactly first, both as written and with a ``response.``-style wrapper
+    stripped. Falls back to a leaf word search for rules that name no field.
     """
     low = rule.lower()
-    tokens = quoted_tokens(rule)
-    if tokens:
-        wanted = tokens[0].lower()
+    target, _expected = rule_field_and_value(rule)
+    wanted = []
+    if target:
+        wanted.append(target.lower())
+        unwrapped = unwrap_field_path(target)
+        if unwrapped:
+            wanted.append(unwrapped.lower())
+    for want in wanted:
         for path in fields:
-            if ".".join(k for k, _ in path).lower() == wanted:
+            if ".".join(k for k, _ in path).lower() == want:
                 return path
     for path in sorted(fields, key=lambda p: len(p[-1][0]), reverse=True):
         leaf = path[-1][0].lower()

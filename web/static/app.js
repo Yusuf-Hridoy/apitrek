@@ -345,17 +345,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 }),
             });
 
-            const data = await res.json();
+            const { data } = await readBody(res);
 
-            if (!res.ok) {
-                const msg = data.detail || data.message || `Server error (${res.status})`;
-                showError(msg);
+            if (!res.ok || !data) {
+                showError(serverErrorMessage(res, data));
                 setLoading(false);
                 return;
             }
 
             lastResult = data;
             lastSessionId = data._session_id || null;
+            if (!lastSessionId) {
+                // The tests are fine; only the history row is missing (the
+                // server logs why). Say so instead of failing silently.
+                showToast("This run couldn't be saved to History.", 'info');
+            }
             renderResults(data);
             showResults();
             const totalCases = (data.positive_test_cases || []).length +
@@ -365,7 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(`✅ ${totalCases} test cases generated`, 'success');
             loadHistory();
         } catch (err) {
-            showError('Network error. Please make sure the server is running.');
+            showError(NETWORK_FAILURE_MESSAGE);
         } finally {
             setLoading(false);
         }
@@ -1400,11 +1404,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
-            if (res.ok) {
-                const plan = await res.json().catch(() => ({}));
-                if (typeof plan.request_count === 'number') {
-                    countText = `about ${plan.request_count}`;
-                }
+            const { data: plan } = await readBody(res);
+            if (res.ok && plan && typeof plan.request_count === 'number') {
+                countText = `about ${plan.request_count}`;
+            } else if (!res.ok) {
+                showError(serverErrorMessage(res, plan));
             }
         } catch (err) { /* plan failed — keep the fallback wording */ }
         let host = payload.endpoint;
@@ -1454,9 +1458,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                const msg = data.detail || `Scan failed (${res.status})`;
+            const { data } = await readBody(res);
+            if (!res.ok || !data) {
+                const msg = serverErrorMessage(res, data);
                 if (securityScanLoading) securityScanLoading.classList.add('hidden');
                 if (securityScanError) {
                     securityScanError.textContent = msg;
@@ -1472,7 +1476,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 'success'
             );
         } catch (err) {
-            const msg = 'Scan failed. Please make sure the server is running.';
+            const msg = NETWORK_FAILURE_MESSAGE;
             if (securityScanLoading) securityScanLoading.classList.add('hidden');
             if (securityScanError) {
                 securityScanError.textContent = msg;
@@ -1920,12 +1924,24 @@ document.addEventListener('DOMContentLoaded', () => {
     function applyStoredExecutionResults(execResults) {
         if (!Array.isArray(execResults) || !execResults.length) return;
         const byId = {};
-        execResults.forEach((r) => { byId[String(r.test_case_id)] = r; });
+        const unkeyed = [];
+        execResults.forEach((r) => {
+            const key = r.test_case_id == null ? '' : String(r.test_case_id);
+            if (key) byId[key] = r; else unkeyed.push(r);
+        });
+        // Sessions saved before assertions had ids stored every assertion
+        // result under an empty id. Apply those in saved order, one per
+        // assertion card, instead of collapsing them all onto one card.
+        let nextUnkeyed = 0;
         caseCards.forEach((entry) => {
             // Match by the original LLM id first (live runs / new reruns), then
             // fall back to the DB row id (legacy reruns).
-            const r = byId[String(entry.data.id)] ||
+            let r = byId[String(entry.data.id)] ||
                 (entry.data._dbId ? byId[String(entry.data._dbId)] : null);
+            if (!r && entry.category === 'assertion' && nextUnkeyed < unkeyed.length) {
+                r = unkeyed[nextUnkeyed];
+                nextUnkeyed += 1;
+            }
             if (!r) return;
             applyExecutionResult(entry, {
                 passed: !!r.passed,
@@ -2083,9 +2099,46 @@ document.addEventListener('DOMContentLoaded', () => {
     function showError(msg) {
         errorMessage.textContent = msg;
         errorSection.classList.remove('hidden');
+        // Scroll the banner into view: on a long page the message would
+        // otherwise sit above the fold and the action would look silent.
+        if (typeof errorSection.scrollIntoView === 'function') {
+            errorSection.scrollIntoView({ block: 'nearest' });
+        }
         clearTimeout(errorTimer);
         errorTimer = setTimeout(hideError, 8000);
     }
+
+    // Read a response body without ever throwing: a host that is waking up or
+    // overloaded answers with an HTML 502/503/504 page, and calling
+    // res.json() on that used to throw and surface as a fake network error.
+    async function readBody(res) {
+        let text = '';
+        try {
+            text = await res.text();
+        } catch (err) {
+            return { data: null, text: '' };
+        }
+        try {
+            return { data: JSON.parse(text), text };
+        } catch (err) {
+            return { data: null, text };
+        }
+    }
+
+    // Plain-English message for a non-OK response.
+    function serverErrorMessage(res, data) {
+        const detail = data && (data.detail || data.message);
+        if (typeof detail === 'string' && detail.trim()) return detail;
+        if (res.ok) return "The server's reply couldn't be read. Try again.";
+        if (res.status === 502 || res.status === 503 || res.status === 504) {
+            return 'The server is waking up or busy. Wait a few seconds and try again.';
+        }
+        return `Something went wrong on the server (status ${res.status}). Try again.`;
+    }
+
+    // fetch() itself threw: the request never reached the server.
+    const NETWORK_FAILURE_MESSAGE =
+        "Couldn't reach the server. Check your connection and try again.";
 
     function hideError() {
         errorSection.classList.add('hidden');
