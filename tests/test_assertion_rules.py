@@ -167,5 +167,68 @@ def test_url_digits_are_not_status_codes():
     assert status_code_rule("GET https://api.example.com/v1/404 returns a body") is None
 
 
+
+# --- unquoted expected values -------------------------------------------------
+
+@pytest.mark.parametrize("rule,field,value", [
+    ("args.num == 999", "args.num", "999"),
+    ("args.num == 123", "args.num", "123"),
+    ("id equals 5", "id", "5"),
+    ("id equals 6", "id", "6"),
+    ("count must be 10", "count", "10"),
+    ("active is true", "active", "true"),
+    ("deleted_at is null", "deleted_at", "null"),
+    ("offset should be -4", "offset", "-4"),
+    ("ratio must be 1.5", "ratio", "1.5"),
+    ("total is 12.", "total", "12"),
+])
+def test_unquoted_number_boolean_and_null_are_values(rule, field, value):
+    assert rule_field_and_value(rule) == (field, value)
+
+
+@pytest.mark.parametrize("rule", [
+    "Response must be fast",
+    "the reply should be quick",
+    "name must be unique",
+])
+def test_an_ordinary_word_is_never_an_unquoted_value(rule):
+    """Without a value there is no field either, so a plain sentence stays
+    'not mechanically verifiable' instead of becoming a bogus check."""
+    assert rule_field_and_value(rule) == (None, None)
+
+
+@pytest.mark.parametrize("rule,field", [
+    ("data.id is an integer", "data.id"),
+    ("items.sku is a string", "items.sku"),
+    ("Field 'price' must be a number", "price"),
+    ("'id' is present", "id"),
+])
+def test_type_and_presence_rules_keep_no_value(rule, field):
+    assert rule_field_and_value(rule) == (field, None)
+
+
+def test_quoted_value_still_wins_over_an_unquoted_word():
+    assert rule_field_and_value("args.name equals 'alice'") == ("args.name", "alice")
+
+
+def test_unquoted_field_needs_an_unquoted_value():
+    """'retry_count' is only read as a field because '3' is a real value."""
+    assert rule_field_and_value("retry_count == 3") == ("retry_count", "3")
+    assert rule_field_and_value("retry_count must be reasonable") == (None, None)
+
+
+def test_unquoted_url_is_not_a_value():
+    field, value = rule_field_and_value("response.url equals https://httpbin.org/get")
+    assert field == "response.url"
+    assert value is None
+
+
+def test_status_rules_are_unaffected():
+    """Status rules are decided before field parsing, so this is unchanged."""
+    assert status_code_rule("status must be 200 or 201") == {
+        "codes": [200, 201], "multi_case": False
+    }
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

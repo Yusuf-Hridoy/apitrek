@@ -1074,5 +1074,73 @@ def test_login_test_empty_case_header_omits_it(mock_request):
     assert kwargs["headers"]["X-Trace"] == "1"
 
 
+
+# --- unquoted expected values are really compared ------------------------------
+
+def test_unquoted_value_mismatch_is_a_failure_not_a_false_pass():
+    """The important one: `== 999` used to pass as long as the field existed."""
+    ok, detail, verifiable = _run_assertion_rule(
+        "args.num == 999", {"args": {"num": "123"}}, 200)
+    assert (ok, verifiable) == (False, True)
+    assert "value differs" in detail
+
+
+def test_unquoted_value_match_passes():
+    ok, detail, verifiable = _run_assertion_rule(
+        "args.num == 123", {"args": {"num": "123"}}, 200)
+    assert (ok, verifiable) == (True, True)
+    assert "value matches" in detail
+
+
+def test_unquoted_field_and_value_are_compared():
+    ok, _, verifiable = _run_assertion_rule("id equals 5", {"id": 5}, 200)
+    assert (ok, verifiable) == (True, True)
+
+    ok, detail, verifiable = _run_assertion_rule("id equals 6", {"id": 5}, 200)
+    assert (ok, verifiable) == (False, True)
+    assert "value differs" in detail
+
+
+def test_unquoted_must_be_compares():
+    ok, _, verifiable = _run_assertion_rule("count must be 10", {"count": 10}, 200)
+    assert (ok, verifiable) == (True, True)
+
+
+def test_unquoted_boolean_and_null_values():
+    ok, _, verifiable = _run_assertion_rule("active is true", {"active": True}, 200)
+    assert (ok, verifiable) == (True, True)
+
+    ok, detail, verifiable = _run_assertion_rule("active is true", {"active": False}, 200)
+    assert (ok, verifiable) == (False, True)
+    assert "value differs" in detail
+
+    ok, _, verifiable = _run_assertion_rule(
+        "deleted_at is null", {"deleted_at": None}, 200)
+    assert (ok, verifiable) == (True, True)
+
+
+def test_plain_sentence_is_still_needs_review():
+    ok, detail, verifiable = _run_assertion_rule("Response must be fast", {"id": 1}, 200)
+    assert ok is False
+    assert verifiable is False
+    assert "not mechanically verifiable" in detail
+
+
+def test_unquoted_field_missing_from_the_response_is_needs_review():
+    """A word read as a field must never turn into a hard failure."""
+    ok, detail, verifiable = _run_assertion_rule("count must be 10", {}, 200)
+    assert ok is False
+    assert verifiable is False
+    assert "isn't in the response" in detail
+
+
+def test_status_rule_with_alternatives_is_unchanged():
+    """The status rule is decided before any field parsing."""
+    ok, detail, verifiable = _run_assertion_rule(
+        "status must be 200 or 201", {"id": 1}, 201)
+    assert (ok, verifiable) == (True, True)
+    assert detail == "Expected HTTP 200 or 201, got 201"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

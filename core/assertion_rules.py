@@ -128,21 +128,66 @@ def _is_not_a_field(token: str) -> bool:
     return low.rsplit(".", 1)[-1] in _DOMAIN_ENDINGS
 
 
+# An UNQUOTED expected value is only read when it is unambiguous: a number,
+# a boolean, or null. "must be fast" and "is a string" name no value, so an
+# ordinary word after an equality phrase is never treated as one.
+_UNQUOTED_VALUE_RE = re.compile(
+    r"^(?:[+-]?\d+(?:\.\d+)?|true|false|null)$", re.IGNORECASE
+)
+_VALUE_PUNCTUATION = ".,;:!?)\"'"
+
+# The identifier immediately before an equality phrase ("count must be 10").
+_TRAILING_IDENTIFIER_RE = re.compile(r"([A-Za-z_]\w*)\s*$")
+
+
+def _unquoted_value_after(text: str, start: int) -> Optional[str]:
+    """The word right after an equality phrase, when it is a number, a
+    boolean or null — otherwise None."""
+    rest = text[start:].lstrip()
+    if not rest:
+        return None
+    word = rest.split()[0].rstrip(_VALUE_PUNCTUATION)
+    if word and _UNQUOTED_VALUE_RE.match(word):
+        return word
+    return None
+
+
+def _unquoted_field_before(text: str) -> Optional[str]:
+    """The single identifier right before an equality phrase, or None."""
+    match = _TRAILING_IDENTIFIER_RE.search(text)
+    if not match:
+        return None
+    token = match.group(1)
+    return None if _is_not_a_field(token) else token
+
+
 def rule_field_and_value(rule: str) -> Tuple[Optional[str], Optional[str]]:
     """Split a rule into (field, expected_value).
 
     The field is the first dotted path that isn't a host name, an
     abbreviation or the expected value; failing that, the first quoted token
-    that looks like a name. The expected value is the first quoted string
-    after an equals-style phrase that isn't the field itself — any content,
-    including an empty string. Returns (None, None) when the rule names no
-    field at all.
+    that looks like a name; failing that — and only when the rule compares
+    against an unquoted number, boolean or null — the single identifier right
+    before the equality phrase ("count must be 10" -> "count").
+
+    The expected value is the first quoted string after an equals-style
+    phrase that isn't the field itself (any content, empty included). When
+    nothing is quoted there, an unquoted number, ``true``, ``false`` or
+    ``null`` counts too, so ``args.num == 999`` really compares instead of
+    quietly passing on the field's mere existence. An ordinary word after
+    the phrase ("must be fast", "is a string") is never a value.
+
+    Returns (None, None) when the rule names no field at all.
     """
     text = str(rule)
     spans = [(m.group(1), m.start(), m.end()) for m in _QUOTED_RE.finditer(text)]
     equality = _equality_span(text)
     value_spans = [s for s in spans if equality and s[1] >= equality[1]]
     field_spans = [s for s in spans if s not in value_spans]
+
+    unquoted_value = None
+    if equality and not value_spans:
+        unquoted_value = _unquoted_value_after(text, equality[1])
 
     # Field search text: the expected value, URLs and abbreviations removed,
     # bracket notation turned into dots.
@@ -167,6 +212,13 @@ def rule_field_and_value(rule: str) -> Tuple[Optional[str], Optional[str]]:
                 target = token
                 break
 
+    if target is None and unquoted_value is not None and not spans:
+        # Nothing dotted, nothing quoted — but the rule really does compare
+        # against a value, so the word before the phrase is the field.
+        # Without that value this stays None: a plain sentence ("Response
+        # must be fast") must not be read as a check on a field.
+        target = _unquoted_field_before(text[: equality[0]])
+
     if target is None:
         return None, None
 
@@ -180,6 +232,8 @@ def rule_field_and_value(rule: str) -> Tuple[Optional[str], Optional[str]]:
                 continue
             value = content
             break
+        if value is None:
+            value = unquoted_value
     return target, value
 
 

@@ -245,3 +245,57 @@ def test_full_postman_export_for_these_rules_is_valid():
     parsed = json.loads(collection)  # valid v2.1 JSON
     script = "\n".join(parsed["item"][0]["event"][0]["script"]["exec"])
     assert 'jsonData["headers"]["User-Agent"]' in script
+
+
+# --- rules whose expected value is written without quotes ---------------------
+
+UNQUOTED_RESP = {"id": 5, "count": 10, "active": True, "args": {"num": "123"}}
+
+UNQUOTED_RULES = [
+    "args.num == 999",
+    "id equals 5",
+    "count must be 10",
+    "active is true",
+    "deleted_at is null",
+]
+
+
+def test_unquoted_value_rules_export_valid_pytest():
+    lines = pytest_assertions(UNQUOTED_RESP, UNQUOTED_RULES)
+    source = "def _check(response):\n" + "\n".join(lines) + "\n"
+    ast.parse(source)  # valid Python
+    # The value is an expectation, never a field: no assert on "999"/"true".
+    assert '["999"]' not in source
+    assert '["true"]' not in source
+
+    class _FakeResponse:
+        @staticmethod
+        def json():
+            return UNQUOTED_RESP
+
+    namespace = {}
+    exec(compile(source, "<generated>", "exec"), namespace)
+    namespace["_check"](_FakeResponse())  # exports never compare values
+
+
+def test_unquoted_value_rules_export_valid_postman():
+    import json
+
+    test_data = {
+        "positive_test_cases": [
+            {
+                "id": "TC-POS-01",
+                "title": "Valid response",
+                "expected": {"status_code": 200, "validation_rules": UNQUOTED_RULES},
+            }
+        ],
+        "assertions": [{"rule": r, "category": "data"} for r in UNQUOTED_RULES],
+        "sample_response": UNQUOTED_RESP,
+    }
+    ast.parse(generate_pytest_script("https://api.example.com/x", "GET", test_data))
+    parsed = json.loads(
+        generate_postman_collection("https://api.example.com/x", "GET", test_data)
+    )
+    script = "\n".join(parsed["item"][0]["event"][0]["script"]["exec"])
+    assert 'jsonData["args"]["num"]' in script
+    assert '"999"' not in script
